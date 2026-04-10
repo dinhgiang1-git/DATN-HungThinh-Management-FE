@@ -63,6 +63,11 @@ const Icons = {
       <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
     </svg>
   ),
+  search: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+      <circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" />
+    </svg>
+  ),
   refresh: (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
       <polyline points="23 4 23 10 17 10" /><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10" />
@@ -79,6 +84,19 @@ export default function DevicesPage() {
   const [totalElements, setTotalElements] = useState(0);
   const [filterStatus, setFilterStatus] = useState('');
   const [sortDirection, setSortDirection] = useState('asc');
+  const [searchInput, setSearchInput] = useState('');
+  const [searchKeyword, setSearchKeyword] = useState('');
+
+  // Debounce search
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      if (searchKeyword !== searchInput) {
+        setSearchKeyword(searchInput);
+        setPage(0);
+      }
+    }, 500);
+    return () => clearTimeout(timer);
+  }, [searchInput, searchKeyword]);
 
   // Modal
   const [modalOpen, setModalOpen] = useState(false);
@@ -110,6 +128,7 @@ export default function DevicesPage() {
         direction: sortDirection,
       };
       if (filterStatus) params.deviceStatus = filterStatus;
+      if (searchKeyword.trim()) params.keyword = searchKeyword.trim();
 
       const res = await deviceService.getAll(params);
       const data = res.data?.data;
@@ -122,7 +141,7 @@ export default function DevicesPage() {
     } finally {
       setLoading(false);
     }
-  }, [page, filterStatus, sortDirection]);
+  }, [page, filterStatus, sortDirection, searchKeyword]);
 
   useEffect(() => {
     fetchDevices();
@@ -292,6 +311,16 @@ export default function DevicesPage() {
         </div>
 
         <div className="filter-actions">
+          <div className="search-box">
+            <span className="search-box__icon">{Icons.search}</span>
+            <input
+              type="text"
+              className="search-input"
+              placeholder="Tìm kiếm..."
+              value={searchInput}
+              onChange={(e) => setSearchInput(e.target.value)}
+            />
+          </div>
           <button className="btn btn--ghost btn--sm" onClick={handleToggleSort} title="Đổi thứ tự">
             {sortDirection === 'asc' ? '↑ Tăng dần' : '↓ Giảm dần'}
           </button>

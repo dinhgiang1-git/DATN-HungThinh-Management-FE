@@ -78,6 +78,19 @@ export default function UsersPage() {
   const [totalElements, setTotalElements] = useState(0);
   const [filterRole, setFilterRole] = useState('');
   const [sortDirection, setSortDirection] = useState('asc');
+  const [searchInput, setSearchInput] = useState('');
+  const [searchKeyword, setSearchKeyword] = useState('');
+
+  // Debounce search
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      if (searchKeyword !== searchInput) {
+        setSearchKeyword(searchInput);
+        setPage(0);
+      }
+    }, 500);
+    return () => clearTimeout(timer);
+  }, [searchInput, searchKeyword]);
 
   // Modal state
   const [modalOpen, setModalOpen] = useState(false);
@@ -110,6 +123,7 @@ export default function UsersPage() {
         direction: sortDirection,
       };
       if (filterRole) params.userRole = filterRole;
+      if (searchKeyword.trim()) params.keyword = searchKeyword.trim();
 
       const res = await userService.getAll(params);
       const data = res.data?.data;
@@ -122,7 +136,7 @@ export default function UsersPage() {
     } finally {
       setLoading(false);
     }
-  }, [page, filterRole, sortDirection]);
+  }, [page, filterRole, sortDirection, searchKeyword]);
 
   useEffect(() => {
     fetchUsers();
@@ -311,6 +325,16 @@ export default function UsersPage() {
           </div>
         </div>
         <div className="filter-actions">
+          <div className="search-box">
+            <span className="search-box__icon">{Icons.search}</span>
+            <input
+              type="text"
+              className="search-input"
+              placeholder="Tìm kiếm..."
+              value={searchInput}
+              onChange={(e) => setSearchInput(e.target.value)}
+            />
+          </div>
           <button className="btn btn--ghost btn--sm" onClick={handleToggleSort} title="Đổi thứ tự sắp xếp">
             {sortDirection === 'asc' ? '↑ Tăng dần' : '↓ Giảm dần'}
           </button>
