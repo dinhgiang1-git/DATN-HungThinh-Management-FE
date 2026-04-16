@@ -155,9 +155,15 @@ export default function InvoicesPage() {
     invoiceStatus: 'UNPAID',
     electricQuantity: '',
     waterQuantity: '',
+    // Tiered electric fields
+    electricIndexOld: '',
+    electricIndexNew: '',
   });
   const [formErrors, setFormErrors] = useState({});
   const [submitting, setSubmitting] = useState(false);
+  
+  // Electric tier breakdown for display (will be populated by backend API)
+  const [electricTierBreakdown, setElectricTierBreakdown] = useState([]);
 
   // Apartments
   const [apartments, setApartments] = useState([]);
@@ -272,7 +278,9 @@ export default function InvoicesPage() {
       invoiceNumber: '', dueDate: defaultDueDate, electricFee: '', waterFee: '',
       managementFee: '', parkingFee: '', otherFee: '', apartmentId: '', invoiceStatus: 'UNPAID',
       electricQuantity: '', waterQuantity: '',
+      electricIndexOld: '', electricIndexNew: '',
     });
+    setElectricTierBreakdown([]); // Clear tier breakdown for new invoice
     setFormErrors({});
     setAptFilterBlock('');
     setAptFilterFloor('');
@@ -305,7 +313,11 @@ export default function InvoicesPage() {
       invoiceStatus: inv.invoiceStatus || 'UNPAID',
       electricQuantity: eq,
       waterQuantity: wq,
+      electricIndexOld: inv.electricIndexOld || '',
+      electricIndexNew: inv.electricIndexNew || '',
     });
+    // Load tier breakdown if available from invoice data
+    setElectricTierBreakdown(inv.electricTierBreakdown || []);
     setFormErrors({});
     setAptFilterBlock('');
     setAptFilterFloor('');
@@ -334,8 +346,9 @@ export default function InvoicesPage() {
         }
       }
       
-      // Auto-calculate electricFee when electricQuantity changes
-      if (field === 'electricQuantity' && activeFee && activeFee.electricFee > 0) {
+      // Auto-calculate electricFee when electricQuantity changes (for non-tiered mode)
+      // Only calculate if not using tiered electric (will be overridden by backend API for tiered)
+      if (field === 'electricQuantity' && activeFee && activeFee.electricFee > 0 && !activeFee.useTieredElectric) {
         const qty = Number(updated.electricQuantity);
         updated.electricFee = qty > 0 ? String(qty * Number(activeFee.electricFee)) : '';
       }
@@ -344,6 +357,19 @@ export default function InvoicesPage() {
       if (field === 'waterQuantity' && activeFee && activeFee.waterFee > 0) {
         const qty = Number(updated.waterQuantity);
         updated.waterFee = qty > 0 ? String(qty * Number(activeFee.waterFee)) : '';
+      }
+      
+      // Calculate consumption when index fields change
+      if ((field === 'electricIndexOld' || field === 'electricIndexNew') && activeFee?.useTieredElectric) {
+        const oldIndex = field === 'electricIndexOld' ? Number(value) : Number(updated.electricIndexOld);
+        const newIndex = field === 'electricIndexNew' ? Number(value) : Number(updated.electricIndexNew);
+        
+        if (!isNaN(oldIndex) && !isNaN(newIndex) && newIndex > oldIndex) {
+          const consumption = newIndex - oldIndex;
+          updated.electricQuantity = String(consumption);
+          // Note: electricFee will be calculated by backend API when submitting
+          // For now, we just show the consumption
+        }
       }
       
       return updated;
@@ -976,24 +1002,85 @@ export default function InvoicesPage() {
                 </div>
 
                 {/* Electric fee */}
-                {/* Electric quantity */}
-                <div className="form-field">
-                  <label className="form-label" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    Tiền điện (VNĐ)
-                    {activeFee && activeFee.electricFee > 0 && (
-                      <span style={{ color: '#e74c3c', fontSize: '0.8rem', fontWeight: 600 }}>
-                        {shortMoney(activeFee.electricFee)}/kWh
-                      </span>
+                {/* Tiered electric mode - show index fields */}
+                {activeFee && activeFee.useTieredElectric ? (
+                  <>
+                    <div className="form-field" style={{ display: 'flex', gap: 16 }}>
+                      <div style={{ flex: 1 }}>
+                        <label className="form-label">Chỉ số điện cũ (kWh)</label>
+                        <input 
+                          type="text" 
+                          className="form-input" 
+                          value={formatInputCurrency(formData.electricIndexOld)}
+                          onChange={(e) => handleFormChange('electricIndexOld', parseInputCurrency(e.target.value))}
+                          placeholder="Nhập chỉ số cũ" 
+                        />
+                      </div>
+                      <div style={{ flex: 1 }}>
+                        <label className="form-label">Chỉ số điện mới (kWh)</label>
+                        <input 
+                          type="text" 
+                          className="form-input" 
+                          value={formatInputCurrency(formData.electricIndexNew)}
+                          onChange={(e) => handleFormChange('electricIndexNew', parseInputCurrency(e.target.value))}
+                          placeholder="Nhập chỉ số mới" 
+                        />
+                      </div>
+                    </div>
+                    
+                    {/* Consumption display */}
+                    {formData.electricQuantity && (
+                      <div className="form-field">
+                        <label className="form-label">Điện năng tiêu thụ (kWh)</label>
+                        <input 
+                          type="text" 
+                          className="form-input" 
+                          value={formatInputCurrency(formData.electricQuantity)}
+                          readOnly
+                          style={{ background: '#f3f4f6', color: '#1f2937', cursor: 'not-allowed', fontWeight: 600 }}
+                        />
+                      </div>
                     )}
-                  </label>
-                  <input 
-                    type="text" 
-                    className="form-input" 
-                    value={formatInputCurrency(formData.electricQuantity)}
-                    onChange={(e) => handleFormChange('electricQuantity', parseInputCurrency(e.target.value))}
-                    placeholder="Nhập số điện tiêu thụ" 
-                  />
-                </div>
+                    
+                    {/* Tier breakdown preview (if available) */}
+                    {electricTierBreakdown.length > 0 && (
+                      <div className="form-field">
+                        <label className="form-label">Chi tiết tính theo bậc</label>
+                        <div style={{ background: '#f9fafb', padding: 12, borderRadius: 8, fontSize: '0.85rem' }}>
+                          {electricTierBreakdown.map((tier, idx) => (
+                            <div key={idx} style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
+                              <span>Bậc {tier.tierOrder || (idx + 1)}: {tier.units || 0} kWh × {shortMoney(tier.unitPrice || 0)}</span>
+                              <span style={{ fontWeight: 600 }}>{shortMoney(tier.amount || 0)}</span>
+                            </div>
+                          ))}
+                          <div style={{ borderTop: '1px solid #e5e7eb', marginTop: 8, paddingTop: 8, fontWeight: 700, display: 'flex', justifyContent: 'space-between' }}>
+                            <span>Tổng:</span>
+                            <span>{shortMoney(electricTierBreakdown.reduce((sum, t) => sum + (Number(t.amount) || 0), 0))}</span>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </>
+                ) : (
+                  /* Non-tiered mode - show quantity field */
+                  <div className="form-field">
+                    <label className="form-label" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      Số điện tiêu thụ (kWh)
+                      {activeFee && activeFee.electricFee > 0 && (
+                        <span style={{ color: '#e74c3c', fontSize: '0.8rem', fontWeight: 600 }}>
+                          {shortMoney(activeFee.electricFee)}/kWh
+                        </span>
+                      )}
+                    </label>
+                    <input 
+                      type="text" 
+                      className="form-input" 
+                      value={formatInputCurrency(formData.electricQuantity)}
+                      onChange={(e) => handleFormChange('electricQuantity', parseInputCurrency(e.target.value))}
+                      placeholder="Nhập số điện tiêu thụ" 
+                    />
+                  </div>
+                )}
 
                 {/* Water quantity */}
                 <div className="form-field">
@@ -1014,7 +1101,7 @@ export default function InvoicesPage() {
                   />
                 </div>
 
-                {/* Electric fee (auto-calculated) */}
+                {/* Electric fee (auto-calculated or from API) */}
                 <div className="form-field">
                   <label className="form-label">Tổng tiền điện (VNĐ)</label>
                   <input 
@@ -1022,7 +1109,7 @@ export default function InvoicesPage() {
                     className="form-input" 
                     value={formatInputCurrency(formData.electricFee)}
                     readOnly
-                    placeholder="Tự động tính từ số điện" 
+                    placeholder={activeFee?.useTieredElectric ? "Tính từ backend API" : "Tự động tính từ số điện"} 
                     style={{ background: '#d1fae5', color: '#047857', cursor: 'not-allowed', fontWeight: 600 }}
                   />
                 </div>
@@ -1189,6 +1276,30 @@ export default function InvoicesPage() {
                 </thead>
                 <tbody>
                   <tr><td>Tiền điện</td><td style={{ textAlign: 'right' }}>{money(selectedInvoice.electricFee)}</td></tr>
+                  {selectedInvoice.electricTierBreakdown && selectedInvoice.electricTierBreakdown.length > 0 && (
+                    <tr>
+                      <td colSpan="2" style={{ padding: '8px 12px', background: '#f9fafb' }}>
+                        <div style={{ fontSize: '0.85rem' }}>
+                          <strong>Chi tiết tính theo bậc:</strong>
+                          {selectedInvoice.electricTierBreakdown.map((tier, idx) => (
+                            <div key={idx} style={{ display: 'flex', justifyContent: 'space-between', marginTop: 4 }}>
+                              <span>Bậc {tier.tierOrder || (idx + 1)}: {tier.units || 0} kWh × {shortMoney(tier.unitPrice || 0)}</span>
+                              <span>{shortMoney(tier.amount || 0)}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </td>
+                    </tr>
+                  )}
+                  {selectedInvoice.electricIndexOld != null && selectedInvoice.electricIndexNew != null && (
+                    <tr>
+                      <td colSpan="2" style={{ fontSize: '0.85rem', color: '#6b7280', padding: '4px 12px' }}>
+                        Chỉ số cũ: {Number(selectedInvoice.electricIndexOld).toLocaleString('vi-VN')} kWh | 
+                        Chỉ số mới: {Number(selectedInvoice.electricIndexNew).toLocaleString('vi-VN')} kWh | 
+                        Tiêu thụ: {(Number(selectedInvoice.electricIndexNew) - Number(selectedInvoice.electricIndexOld)).toLocaleString('vi-VN')} kWh
+                      </td>
+                    </tr>
+                  )}
                   <tr><td>Tiền nước</td><td style={{ textAlign: 'right' }}>{money(selectedInvoice.waterFee)}</td></tr>
                   <tr><td>Phí quản lý</td><td style={{ textAlign: 'right' }}>{money(selectedInvoice.managementFee)}</td></tr>
                   <tr><td>Phí gửi xe</td><td style={{ textAlign: 'right' }}>{money(selectedInvoice.parkingFee)}</td></tr>
