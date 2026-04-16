@@ -213,8 +213,6 @@ export default function NotificationsPage() {
   const validateForm = () => {
     const errors = {};
     if (!formData.title.trim()) errors.title = 'Vui lòng nhập tiêu đề';
-    if (!formData.content.trim()) errors.content = 'Vui lòng nhập nội dung';
-    if (formData.content.trim().length < 4) errors.content = 'Nội dung phải có ít nhất 4 ký tự';
     if (!formData.targetType) errors.targetType = 'Vui lòng chọn đối tượng';
     if (formData.targetType === 'BLOCK' && !formData.block.trim()) errors.block = 'Vui lòng nhập tên Block';
     if (formData.targetType === 'APARTMENT' && !formData.apartmentId) errors.apartmentId = 'Vui lòng chọn căn hộ';
@@ -389,7 +387,14 @@ export default function NotificationsPage() {
                 return (
                   <tr key={notif.notificationId}>
                     <td className="data-table__cell--id">{notif.notificationId}</td>
-                    <td className="data-table__cell--bold">{notif.title}</td>
+                    <td className="data-table__cell--bold">
+                      <div
+                        style={{ maxWidth: '300px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}
+                        title={notif.title}
+                      >
+                        {notif.title}
+                      </div>
+                    </td>
                     <td>
                       <span className="badge" style={{ color: tc.color, backgroundColor: tc.bg }}>
                         {targetLabel[notif.targetType] || notif.targetType}
@@ -493,7 +498,7 @@ export default function NotificationsPage() {
                 {/* Content */}
                 <div className="form-field form-field--full">
                   <label className="form-label">
-                    Nội dung <span className="form-required">*</span>
+                    Nội dung
                   </label>
                   <textarea
                     className={`form-input form-textarea ${formErrors.content ? 'form-input--error' : ''}`}
@@ -644,7 +649,7 @@ export default function NotificationsPage() {
                 </div>
                 <div className="detail-item">
                   <span className="detail-label">Tiêu đề</span>
-                  <span className="detail-value detail-value--bold">{selectedNotification.title}</span>
+                  <span className="detail-value detail-value--bold" style={{ textAlign: 'left', flex: 1, paddingLeft: '2rem' }}>{selectedNotification.title}</span>
                 </div>
                 <div className="detail-item">
                   <span className="detail-label">Đối tượng</span>

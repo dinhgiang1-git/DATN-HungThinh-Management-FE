@@ -1,9 +1,14 @@
 import { useState, useEffect, useCallback } from 'react';
 import { toast } from 'react-toastify';
+import DatePicker, { registerLocale } from 'react-datepicker';
+import { vi } from 'date-fns/locale';
+import 'react-datepicker/dist/react-datepicker.css';
 import invoiceService from '../services/invoiceService';
 import apartmentService from '../services/apartmentService';
 import tableFeeService from '../services/tableFeeService';
 import paymentService from '../services/paymentService';
+
+registerLocale('vi', vi);
 
 /* ─── constants ─── */
 const STATUSES = [
@@ -254,8 +259,17 @@ export default function InvoicesPage() {
   const openCreateModal = () => {
     setModalMode('create');
     setSelectedInvoice(null);
+    
+    // Default dueDate to today + 1 day of next month (using local timezone)
+    const today = new Date();
+    const nextMonthDate = new Date(today.getFullYear(), today.getMonth() + 1, today.getDate() + 1);
+    const yyyy = nextMonthDate.getFullYear();
+    const mm = String(nextMonthDate.getMonth() + 1).padStart(2, '0');
+    const dd = String(nextMonthDate.getDate()).padStart(2, '0');
+    const defaultDueDate = `${yyyy}-${mm}-${dd}`;
+    
     setFormData({
-      invoiceNumber: '', dueDate: '', electricFee: '', waterFee: '',
+      invoiceNumber: '', dueDate: defaultDueDate, electricFee: '', waterFee: '',
       managementFee: '', parkingFee: '', otherFee: '', apartmentId: '', invoiceStatus: 'UNPAID',
       electricQuantity: '', waterQuantity: '',
     });
@@ -949,11 +963,14 @@ export default function InvoicesPage() {
                 {/* Due date */}
                 <div className="form-field">
                   <label className="form-label">Hạn thanh toán <span className="form-required">*</span></label>
-                  <input
-                    type="date"
+                  <DatePicker
+                    selected={formData.dueDate ? new Date(formData.dueDate) : null}
+                    onChange={(date) => handleFormChange('dueDate', date ? date.toISOString().substring(0, 10) : '')}
+                    dateFormat="dd/MM/yyyy"
+                    locale="vi"
+                    placeholderText="dd/MM/yyyy"
                     className={`form-input ${formErrors.dueDate ? 'form-input--error' : ''}`}
-                    value={formData.dueDate}
-                    onChange={(e) => handleFormChange('dueDate', e.target.value)}
+                    isClearable
                   />
                   {formErrors.dueDate && <span className="form-error">{formErrors.dueDate}</span>}
                 </div>

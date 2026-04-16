@@ -1,8 +1,13 @@
 import { useState, useEffect, useCallback } from 'react';
 import { toast } from 'react-toastify';
+import DatePicker, { registerLocale } from 'react-datepicker';
+import { vi } from 'date-fns/locale';
+import 'react-datepicker/dist/react-datepicker.css';
 import maintenanceService from '../services/maintenanceService';
 import deviceService from '../services/deviceService';
 import userService from '../services/userService';
+
+registerLocale('vi', vi);
 
 /* ─── constants ─── */
 const STATUSES = [
@@ -25,6 +30,20 @@ const statusColor = {
 };
 
 const PAGE_SIZE = 10;
+
+const deviceStatusLabel = {
+  ACTIVE: 'Hoạt động',
+  INACTIVE: 'Ngừng hoạt động',
+  UNDER_MAINTENANCE: 'Đang bảo trì',
+  BROKEN: 'Hỏng',
+};
+
+const deviceStatusColor = {
+  ACTIVE: { color: '#059669', bg: '#d1fae5' },
+  INACTIVE: { color: '#6b7280', bg: '#f3f4f6' },
+  UNDER_MAINTENANCE: { color: '#d97706', bg: '#fef3c7' },
+  BROKEN: { color: '#dc2626', bg: '#fee2e2' },
+};
 
 /* ─── icons ─── */
 const Icons = {
@@ -159,6 +178,9 @@ export default function MaintenancesPage() {
   // Dropdown data
   const [devices, setDevices] = useState([]);
   const [technicians, setTechnicians] = useState([]);
+  const [deviceSearchKeyword, setDeviceSearchKeyword] = useState('');
+  const [deviceStatusFilter, setDeviceStatusFilter] = useState('');
+  const [techSearchKeyword, setTechSearchKeyword] = useState('');
 
   /* ─── fetch ─── */
   const fetchMaintenances = useCallback(async () => {
@@ -473,36 +495,84 @@ export default function MaintenancesPage() {
                   <label className="form-label">
                     Thiết bị <span className="form-required">*</span>
                   </label>
-                  <div className="resident-select">
-                    {devices.length === 0 ? (
-                      <p className="resident-select__empty">Không có thiết bị nào</p>
-                    ) : (
-                      <div className="resident-select__grid">
-                        {devices.map((d) => {
-                          const selected = String(formData.deviceId) === String(d.id);
-                          return (
-                            <label
-                              key={d.id}
-                              className={`resident-select__item ${selected ? 'resident-select__item--active' : ''}`}
-                            >
-                              <input
-                                type="radio"
-                                name="deviceSelect"
-                                checked={selected}
-                                onChange={() => handleFormChange('deviceId', d.id)}
-                                className="resident-select__checkbox"
-                              />
-                              <div className="resident-select__info">
-                                <span className="resident-select__name">{d.deviceName}</span>
-                                <span className="resident-select__sub">
-                                  {d.location || '—'}{d.deviceStatus ? ` · ${d.deviceStatus}` : ''}
-                                </span>
-                              </div>
-                            </label>
-                          );
-                        })}
-                      </div>
-                    )}
+                  <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.5rem' }}>
+                    <div className="search-box" style={{ flex: 1 }}>
+                      <span className="search-box__icon">{Icons.search}</span>
+                      <input
+                        type="text"
+                        className="search-input"
+                        placeholder="Tìm thiết bị..."
+                        value={deviceSearchKeyword}
+                        onChange={(e) => setDeviceSearchKeyword(e.target.value)}
+                      />
+                    </div>
+                    <select
+                      className="form-select"
+                      value={deviceStatusFilter}
+                      onChange={(e) => setDeviceStatusFilter(e.target.value)}
+                      style={{ width: 'auto', minWidth: '140px' }}
+                    >
+                      <option value="">Tất cả trạng thái</option>
+                      <option value="ACTIVE">Hoạt động</option>
+                      <option value="INACTIVE">Ngừng hoạt động</option>
+                      <option value="UNDER_MAINTENANCE">Đang bảo trì</option>
+                      <option value="BROKEN">Hỏng</option>
+                    </select>
+                  </div>
+                  <div className="resident-select" style={{ maxHeight: '195px' }}>
+                    {(() => {
+                      const filtered = devices.filter((d) => {
+                        if (deviceStatusFilter && d.deviceStatus !== deviceStatusFilter) return false;
+                        if (deviceSearchKeyword.trim()) {
+                          const kw = deviceSearchKeyword.trim().toLowerCase();
+                          return (d.deviceName || '').toLowerCase().includes(kw) ||
+                                 (d.location || '').toLowerCase().includes(kw);
+                        }
+                        return true;
+                      });
+                      return filtered.length === 0 ? (
+                        <p className="resident-select__empty">Không tìm thấy thiết bị nào</p>
+                      ) : (
+                        <div className="resident-select__grid">
+                          {filtered.map((d) => {
+                            const selected = String(formData.deviceId) === String(d.id);
+                            return (
+                              <label
+                                key={d.id}
+                                className={`resident-select__item ${selected ? 'resident-select__item--active' : ''}`}
+                              >
+                                <input
+                                  type="radio"
+                                  name="deviceSelect"
+                                  checked={selected}
+                                  onChange={() => handleFormChange('deviceId', d.id)}
+                                  className="resident-select__checkbox"
+                                />
+                                <div className="resident-select__info">
+                                  <span className="resident-select__name">{d.deviceName}</span>
+                                  <span className="resident-select__sub">
+                                    {d.location || '—'}
+                                    {d.deviceStatus && (
+                                      <span
+                                        className="badge"
+                                        style={{
+                                          marginLeft: '0.5rem',
+                                          fontSize: '0.7rem',
+                                          color: deviceStatusColor[d.deviceStatus]?.color || '#6b7280',
+                                          backgroundColor: deviceStatusColor[d.deviceStatus]?.bg || '#f3f4f6',
+                                        }}
+                                      >
+                                        {deviceStatusLabel[d.deviceStatus] || d.deviceStatus}
+                                      </span>
+                                    )}
+                                  </span>
+                                </div>
+                              </label>
+                            );
+                          })}
+                        </div>
+                      );
+                    })()}
                   </div>
                   {formErrors.deviceId && <span className="form-error">{formErrors.deviceId}</span>}
                 </div>
@@ -512,11 +582,14 @@ export default function MaintenancesPage() {
                   <label className="form-label">
                     Ngày bắt đầu <span className="form-required">*</span>
                   </label>
-                  <input
-                    type="date"
+                  <DatePicker
+                    selected={formData.startedDate ? new Date(formData.startedDate) : null}
+                    onChange={(date) => handleFormChange('startedDate', date ? date.toISOString().substring(0, 10) : '')}
+                    dateFormat="dd/MM/yyyy"
+                    locale="vi"
+                    placeholderText="dd/MM/yyyy"
                     className={`form-input ${formErrors.startedDate ? 'form-input--error' : ''}`}
-                    value={formData.startedDate}
-                    onChange={(e) => handleFormChange('startedDate', e.target.value)}
+                    isClearable
                   />
                   {formErrors.startedDate && <span className="form-error">{formErrors.startedDate}</span>}
                 </div>
@@ -524,11 +597,14 @@ export default function MaintenancesPage() {
                 {/* Completed date */}
                 <div className="form-field">
                   <label className="form-label">Ngày hoàn thành</label>
-                  <input
-                    type="date"
+                  <DatePicker
+                    selected={formData.completedDate ? new Date(formData.completedDate) : null}
+                    onChange={(date) => handleFormChange('completedDate', date ? date.toISOString().substring(0, 10) : '')}
+                    dateFormat="dd/MM/yyyy"
+                    locale="vi"
+                    placeholderText="dd/MM/yyyy"
                     className="form-input"
-                    value={formData.completedDate}
-                    onChange={(e) => handleFormChange('completedDate', e.target.value)}
+                    isClearable
                   />
                 </div>
 
@@ -536,12 +612,14 @@ export default function MaintenancesPage() {
                 <div className="form-field">
                   <label className="form-label">Chi phí (VNĐ)</label>
                   <input
-                    type="number"
+                    type="text"
                     className={`form-input ${formErrors.cost ? 'form-input--error' : ''}`}
-                    value={formData.cost}
-                    onChange={(e) => handleFormChange('cost', e.target.value)}
-                    placeholder="VD: 500000"
-                    min="0"
+                    value={formData.cost ? Number(formData.cost).toLocaleString('vi-VN') : ''}
+                    onChange={(e) => {
+                      const raw = e.target.value.replace(/\D/g, '');
+                      handleFormChange('cost', raw);
+                    }}
+                    placeholder="VD: 500.000"
                   />
                   {formErrors.cost && <span className="form-error">{formErrors.cost}</span>}
                 </div>
@@ -577,35 +655,52 @@ export default function MaintenancesPage() {
                   <label className="form-label">
                     Kỹ thuật viên <span className="form-required">*</span>
                   </label>
-                  <div className="resident-select">
-                    {technicians.length === 0 ? (
-                      <p className="resident-select__empty">Không có kỹ thuật viên nào</p>
-                    ) : (
-                      <div className="resident-select__grid">
-                        {technicians.map((t) => {
-                          const checked = formData.technicianId.includes(t.id);
-                          return (
-                            <label
-                              key={t.id}
-                              className={`resident-select__item ${checked ? 'resident-select__item--active' : ''}`}
-                            >
-                              <input
-                                type="checkbox"
-                                checked={checked}
-                                onChange={() => handleTechnicianToggle(t.id)}
-                                className="resident-select__checkbox"
-                              />
-                              <div className="resident-select__info">
-                                <span className="resident-select__name">{t.fullName || t.username}</span>
-                                <span className="resident-select__sub">
-                                  {t.phoneNumber || t.email || 'Kỹ thuật viên'}
-                                </span>
-                              </div>
-                            </label>
-                          );
-                        })}
-                      </div>
-                    )}
+                  <div className="search-box" style={{ marginBottom: '0.5rem' }}>
+                    <span className="search-box__icon">{Icons.search}</span>
+                    <input
+                      type="text"
+                      className="search-input"
+                      placeholder="Tìm kỹ thuật viên..."
+                      value={techSearchKeyword}
+                      onChange={(e) => setTechSearchKeyword(e.target.value)}
+                    />
+                  </div>
+                  <div className="resident-select" style={{ maxHeight: '195px' }}>
+                    {(() => {
+                      const filtered = technicians.filter((t) =>
+                        !techSearchKeyword.trim() ||
+                        (t.fullName || '').toLowerCase().includes(techSearchKeyword.trim().toLowerCase()) ||
+                        (t.phoneNumber || '').includes(techSearchKeyword.trim())
+                      );
+                      return filtered.length === 0 ? (
+                        <p className="resident-select__empty">Không tìm thấy kỹ thuật viên nào</p>
+                      ) : (
+                        <div className="resident-select__grid">
+                          {filtered.map((t) => {
+                            const checked = formData.technicianId.includes(t.id);
+                            return (
+                              <label
+                                key={t.id}
+                                className={`resident-select__item ${checked ? 'resident-select__item--active' : ''}`}
+                              >
+                                <input
+                                  type="checkbox"
+                                  checked={checked}
+                                  onChange={() => handleTechnicianToggle(t.id)}
+                                  className="resident-select__checkbox"
+                                />
+                                <div className="resident-select__info">
+                                  <span className="resident-select__name">{t.fullName || t.username}</span>
+                                  <span className="resident-select__sub">
+                                    {t.phoneNumber || t.email || 'Kỹ thuật viên'}
+                                  </span>
+                                </div>
+                              </label>
+                            );
+                          })}
+                        </div>
+                      );
+                    })()}
                   </div>
                   {formErrors.technicianId && <span className="form-error">{formErrors.technicianId}</span>}
                 </div>

@@ -23,6 +23,16 @@ const statusColor = {
   UNDER_MAINTENANCE: { color: '#d97706', bg: '#fef3c7' },
 };
 
+const relationshipLabel = {
+  OWNER: 'Chủ hộ',
+  SPOUSE: 'Vợ / chồng',
+  CHILD: 'Con',
+  PARENT: 'Cha / mẹ',
+  RELATIVE: 'Người thân',
+  TENANT: 'Người thuê',
+  OTHER: 'Khác',
+};
+
 const PAGE_SIZE = 10;
 
 /* ─── icons ─── */
@@ -109,6 +119,8 @@ export default function ApartmentsPage() {
   });
   const [formErrors, setFormErrors] = useState({});
   const [submitting, setSubmitting] = useState(false);
+  const [residentSearchKeyword, setResidentSearchKeyword] = useState('');
+  const [residentFilterTab, setResidentFilterTab] = useState('owner');
 
   // Available owners & residents (without apartment)
   const [availableOwners, setAvailableOwners] = useState([]);
@@ -220,6 +232,8 @@ export default function ApartmentsPage() {
       residentIds: [],
     });
     setFormErrors({});
+    setResidentSearchKeyword('');
+    setResidentFilterTab('owner');
     fetchAvailableOwners();
     fetchAvailableResidents();
     setModalOpen(true);
@@ -228,7 +242,11 @@ export default function ApartmentsPage() {
   const openEditModal = (apt) => {
     setModalMode('edit');
     setSelectedApartment(apt);
-    const currentResidentIds = apt.residents?.map((r) => r.id) || [];
+    // Filter out null/undefined IDs and also exclude the ownerId from the regular resident list
+    const currentResidentIds = (apt.residents || [])
+      .map((r) => r.id)
+      .filter((id) => id != null && id !== apt.ownerId);
+
     setFormData({
       apartmentNumber: apt.apartmentNumber || '',
       block: apt.block || '',
@@ -239,6 +257,8 @@ export default function ApartmentsPage() {
       residentIds: currentResidentIds,
     });
     setFormErrors({});
+    setResidentSearchKeyword('');
+    setResidentFilterTab('owner');
     fetchAvailableOwners(apt.ownerId);
     fetchAvailableResidents(currentResidentIds);
     setModalOpen(true);
@@ -285,14 +305,20 @@ export default function ApartmentsPage() {
     setSubmitting(true);
 
     try {
+      const finalOwnerId = formData.ownerId ? Number(formData.ownerId) : undefined;
+      // Ensure no null/empty IDs and the owner is not duplicated in residentIds
+      const validResidentIds = formData.residentIds.filter(
+        (id) => id != null && id !== finalOwnerId
+      );
+
       const payload = {
         apartmentNumber: formData.apartmentNumber,
         block: formData.block || undefined,
         floor: Number(formData.floor),
         area: Number(formData.area),
         apartmentStatus: formData.apartmentStatus,
-        ownerId: formData.ownerId ? Number(formData.ownerId) : undefined,
-        residentIds: formData.residentIds,
+        ownerId: finalOwnerId,
+        residentIds: validResidentIds.length > 0 ? validResidentIds : undefined,
       };
 
       let res;
@@ -588,59 +614,143 @@ export default function ApartmentsPage() {
                 </div>
               </div>
 
-              {/* Owner dropdown */}
+              {/* Resident selection with tabs */}
               <div className="form-field" style={{ marginTop: 16 }}>
-                <label className="form-label">Chủ hộ</label>
-                <select
-                  className="form-select"
-                  value={formData.ownerId}
-                  onChange={(e) => handleFormChange('ownerId', e.target.value)}
-                >
-                  <option value="">— Chọn chủ hộ —</option>
-                  {availableOwners.map((o) => (
-                    <option key={o.id} value={o.id}>
-                      {o.fullName || o.userName}{o.phoneNumber ? ` (${o.phoneNumber})` : ''}
-                    </option>
-                  ))}
-                </select>
-                {availableOwners.length === 0 && (
-                  <span className="form-hint">Không có chủ hộ nào khả dụng</span>
-                )}
-              </div>
-
-              {/* Residents multi-select */}
-              <div className="form-field" style={{ marginTop: 16 }}>
-                <label className="form-label">Danh sách cư dân</label>
+                <label className="form-label">Chọn cư dân</label>
+                {/* Filter tabs */}
+                <div className="resident-select__tabs">
+                  <button
+                    type="button"
+                    className={`resident-select__tab ${residentFilterTab === 'owner' ? 'resident-select__tab--active' : ''}`}
+                    onClick={() => { setResidentFilterTab('owner'); setResidentSearchKeyword(''); }}
+                  >
+                    Chủ hộ {formData.ownerId ? '(1)' : ''}
+                  </button>
+                  <button
+                    type="button"
+                    className={`resident-select__tab ${residentFilterTab === 'resident' ? 'resident-select__tab--active' : ''}`}
+                    onClick={() => { setResidentFilterTab('resident'); setResidentSearchKeyword(''); }}
+                  >
+                    Cư dân {formData.residentIds.length > 0 ? `(${formData.residentIds.length})` : ''}
+                  </button>
+                </div>
                 <div className="resident-select">
-                  {availableResidents.length === 0 ? (
-                    <p className="resident-select__empty">Không có cư dân khả dụng</p>
-                  ) : (
-                    <div className="resident-select__grid">
-                      {availableResidents.map((r) => {
-                        const checked = formData.residentIds.includes(r.id);
-                        return (
-                          <label
-                            key={r.id}
-                            className={`resident-select__item ${checked ? 'resident-select__item--active' : ''}`}
-                          >
-                            <input
-                              type="checkbox"
-                              checked={checked}
-                              onChange={() => handleResidentToggle(r.id)}
-                              className="resident-select__checkbox"
-                            />
-                            <div className="resident-select__info">
-                              <span className="resident-select__name">{r.fullName || r.userName}</span>
-                              <span className="resident-select__sub">
-                                {r.phoneNumber || r.email || ''}
-                                {r.relationship ? ` · ${r.relationship}` : ''}
-                              </span>
-                            </div>
-                          </label>
-                        );
-                      })}
-                    </div>
-                  )}
+                  {/* Search box */}
+                  <div className="resident-select__search">
+                    <span className="resident-select__search-icon">{Icons.search}</span>
+                    <input
+                      type="text"
+                      className="resident-select__search-input"
+                      placeholder={residentFilterTab === 'owner' ? 'Tìm kiếm chủ hộ...' : 'Tìm kiếm cư dân...'}
+                      value={residentSearchKeyword}
+                      onChange={(e) => setResidentSearchKeyword(e.target.value)}
+                    />
+                    {residentSearchKeyword && (
+                      <button
+                        type="button"
+                        className="resident-select__search-clear"
+                        onClick={() => setResidentSearchKeyword('')}
+                      >
+                        {Icons.close}
+                      </button>
+                    )}
+                  </div>
+                  {(() => {
+                    const keyword = residentSearchKeyword.trim().toLowerCase();
+                    // Lọc theo tab: owner = OWNER, resident = không phải OWNER
+                    const sourceList = residentFilterTab === 'owner'
+                      ? availableOwners
+                      : availableResidents.filter((r) => r.relationship !== 'OWNER');
+
+                    const filtered = keyword
+                      ? sourceList.filter((r) => {
+                          const name = (r.fullName || r.userName || '').toLowerCase();
+                          const phone = (r.phoneNumber || '').toLowerCase();
+                          const email = (r.email || '').toLowerCase();
+                          return name.includes(keyword) || phone.includes(keyword) || email.includes(keyword);
+                        })
+                      : sourceList;
+
+                    if (sourceList.length === 0) {
+                      return (
+                        <p className="resident-select__empty">
+                          {residentFilterTab === 'owner' ? 'Không có chủ hộ khả dụng' : 'Không có cư dân khả dụng'}
+                        </p>
+                      );
+                    }
+                    if (filtered.length === 0) {
+                      return <p className="resident-select__empty">Không tìm thấy kết quả phù hợp</p>;
+                    }
+
+                    if (residentFilterTab === 'owner') {
+                      // Radio buttons cho chủ hộ
+                      return (
+                        <div className="resident-select__grid">
+                          {filtered.map((r) => {
+                            const selected = Number(formData.ownerId) === r.id;
+                            return (
+                              <label
+                                key={r.id}
+                                className={`resident-select__item ${selected ? 'resident-select__item--active' : ''}`}
+                              >
+                                <input
+                                  type="radio"
+                                  name="ownerId"
+                                  checked={selected}
+                                  onChange={() => handleFormChange('ownerId', r.id)}
+                                  className="resident-select__checkbox"
+                                />
+                                <div className="resident-select__info">
+                                  <span className="resident-select__name">
+                                    {r.fullName || r.userName}
+                                    <span className="resident-select__owner-badge">Chủ hộ</span>
+                                  </span>
+                                  <span className="resident-select__sub">
+                                    {r.phoneNumber || r.email || ''}
+                                  </span>
+                                </div>
+                              </label>
+                            );
+                          })}
+                        </div>
+                      );
+                    } else {
+                      // Checkboxes cho cư dân
+                      return (
+                        <div className="resident-select__grid">
+                          {filtered.map((r) => {
+                            const checked = formData.residentIds.includes(r.id);
+                            return (
+                              <label
+                                key={r.id}
+                                className={`resident-select__item ${checked ? 'resident-select__item--active' : ''}`}
+                              >
+                                <input
+                                  type="checkbox"
+                                  checked={checked}
+                                  onChange={() => handleResidentToggle(r.id)}
+                                  className="resident-select__checkbox"
+                                />
+                                <div className="resident-select__info">
+                                  <span className="resident-select__name">
+                                    {r.fullName || r.userName}
+                                    {r.relationship && (
+                                      <span className="resident-select__owner-badge">
+                                        {relationshipLabel[r.relationship] || r.relationship}
+                                      </span>
+                                    )}
+                                  </span>
+                                  <span className="resident-select__sub">
+                                    {r.phoneNumber || r.email || ''}
+                                  </span>
+                                </div>
+                              </label>
+                            );
+                          })}
+                        </div>
+                      );
+                    }
+                  })()}
                 </div>
               </div>
 
@@ -718,8 +828,13 @@ export default function ApartmentsPage() {
                         {owner.fullName.charAt(0).toUpperCase()}
                       </div>
                       <div className="detail-resident-card__info">
-                        <span className="detail-resident-card__name">{owner.fullName}</span>
-                        <span className="detail-resident-card__sub">Chủ hộ</span>
+                        <span className="detail-resident-card__name">
+                          {owner.fullName}
+                          <span className="resident-select__owner-badge">Chủ hộ</span>
+                        </span>
+                        <span className="detail-resident-card__sub">
+                          {owner.phone || owner.phoneNumber || owner.email || '—'}
+                        </span>
                       </div>
                     </div>
                   ) : (
@@ -730,28 +845,44 @@ export default function ApartmentsPage() {
 
               {/* Residents list in detail */}
               <div className="detail-section">
-                <h4 className="detail-section__title">
-                  Danh sách cư dân ({selectedApartment.residents?.length || 0})
-                </h4>
-                {selectedApartment.residents && selectedApartment.residents.length > 0 ? (
-                  <div className="detail-residents">
-                    {selectedApartment.residents.map((r) => (
-                      <div key={r.id} className="detail-resident-card">
-                        <div className="detail-resident-card__avatar">
-                          {(r.fullName || r.userName || '?').charAt(0).toUpperCase()}
+                {(() => {
+                  const viewResidents = (selectedApartment.residents || []).filter(
+                    (r) => r.residentId !== selectedApartment.ownerId
+                  );
+                  return (
+                    <>
+                      <h4 className="detail-section__title">
+                        Danh sách cư dân ({viewResidents.length})
+                      </h4>
+                      {viewResidents.length > 0 ? (
+                        <div className="detail-residents">
+                          {viewResidents.map((r) => (
+                            <div key={r.residentId || r.id} className="detail-resident-card">
+                              <div className="detail-resident-card__avatar">
+                                {(r.fullName || r.userName || '?').charAt(0).toUpperCase()}
+                              </div>
+                              <div className="detail-resident-card__info">
+                                <span className="detail-resident-card__name">
+                                  {r.fullName || r.userName}
+                                  {r.relationshipType && (
+                                    <span className="resident-select__owner-badge">
+                                      {relationshipLabel[r.relationshipType] || r.relationshipType}
+                                    </span>
+                                  )}
+                                </span>
+                                <span className="detail-resident-card__sub">
+                                  {r.phone || r.phoneNumber || r.email || '—'}
+                                </span>
+                              </div>
+                            </div>
+                          ))}
                         </div>
-                        <div className="detail-resident-card__info">
-                          <span className="detail-resident-card__name">{r.fullName || r.userName}</span>
-                          <span className="detail-resident-card__sub">
-                            {r.phoneNumber || r.email || '—'}
-                          </span>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  <p className="detail-section__empty">Chưa có cư dân nào</p>
-                )}
+                      ) : (
+                        <p className="detail-section__empty">Chưa có cư dân nào</p>
+                      )}
+                    </>
+                  );
+                })()}
               </div>
             </div>
             <div className="modal__footer">
