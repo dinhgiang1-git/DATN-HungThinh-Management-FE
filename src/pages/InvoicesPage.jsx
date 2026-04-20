@@ -6,7 +6,9 @@ import 'react-datepicker/dist/react-datepicker.css';
 import invoiceService from '../services/invoiceService';
 import apartmentService from '../services/apartmentService';
 import tableFeeService from '../services/tableFeeService';
+import tableElectricTierService from '../services/tableElectricTierService';
 import paymentService from '../services/paymentService';
+import evnService from '../services/evnService';
 
 registerLocale('vi', vi);
 
@@ -151,11 +153,17 @@ export default function InvoicesPage() {
     managementFee: '',
     parkingFee: '',
     otherFee: '',
+    descriptionOtherFee: '',
     apartmentId: '',
     invoiceStatus: 'UNPAID',
     electricQuantity: '',
     waterQuantity: '',
+    electricStartDate: '',
+    electricEndDate: '',
+    numberOfHouseholds: '1',
   });
+  const [isCalculatingElectric, setIsCalculatingElectric] = useState(false);
+  const [evnMockInfo, setEvnMockInfo] = useState({ loading: false, data: null, error: null });
   const [formErrors, setFormErrors] = useState({});
   const [submitting, setSubmitting] = useState(false);
 
@@ -180,12 +188,19 @@ export default function InvoicesPage() {
   const [tableFeeEditOpen, setTableFeeEditOpen] = useState(false);
   const [editingFee, setEditingFee] = useState(null);
   const [tableFeeForm, setTableFeeForm] = useState({
-    title: '', electricFee: '', waterFee: '', managementFee: '', parkingFee: '', otherFee: '',
+    title: '', electricFee: '', waterFee: '', managementFee: '', parkingFee: '', otherFee: '', descriptionOtherFee: '',
   });
   const [tableFeeSubmitting, setTableFeeSubmitting] = useState(false);
   const [selectedFeeIndex, setSelectedFeeIndex] = useState(0); // index của bảng phí được chọn
   const [feeDropdownOpen, setFeeDropdownOpen] = useState(false); // dropdown menu state
   const [modalFeeDropdownOpen, setModalFeeDropdownOpen] = useState(false); // modal dropdown menu state
+
+  // Tiered Electric
+  const [electricTiers, setElectricTiers] = useState([]);
+  const [useTieredElectric, setUseTieredElectric] = useState(false);
+  const [tierSubmitting, setTierSubmitting] = useState(false);
+  const [editingTierId, setEditingTierId] = useState(null); // 'new' or tier.id
+  const [tierForm, setTierForm] = useState({ tierOrder: '', limitValue: '', unitPrice: '' });
 
   /* ─── fetch ─── */
   const fetchInvoices = useCallback(async () => {
@@ -228,6 +243,94 @@ export default function InvoicesPage() {
     }
   }, []);
 
+  const fetchGlobalTiers = useCallback(async () => {
+    try {
+      const res = await tableElectricTierService.getAll();
+      setElectricTiers(res.data?.data || []);
+    } catch (err) {
+      console.error('Lỗi tải danh sách cấu hình giá điện bậc thang:', err);
+      setElectricTiers([]);
+    }
+  }, []);
+
+  useEffect(() => {
+    const activeFee = tableFees.length > 0 ? tableFees[selectedFeeIndex] : null;
+    const isTiered = activeFee?.useTieredElectric;
+    
+    if (modalOpen && modalMode === 'create' && isTiered && formData.apartmentId) {
+      const apt = apartments.find(a => String(a.id) === String(formData.apartmentId));
+      if (apt && apt.ownerId) {
+        setEvnMockInfo({ loading: true, data: null, error: null });
+        evnService.getBillByResidentId(apt.ownerId)
+          .then(res => {
+            if (res.data?.status) {
+              const d = res.data.data;
+              setEvnMockInfo({ loading: false, data: d, error: null });
+              setFormData(prev => ({ ...prev, electricQuantity: String(d.kwhConsumed) }));
+              toast.success('Đã tự động lấy biểu điện EVN (Mock)');
+            } else {
+              setEvnMockInfo({ loading: false, data: null, error: res.data?.message || 'Không lấy được EVN' });
+            }
+          })
+          .catch(err => {
+            setEvnMockInfo({ loading: false, data: null, error: 'Chưa có hóa đơn EVN' });
+          });
+      } else {
+         setEvnMockInfo({ loading: false, data: null, error: 'Căn hộ chưa có chủ sở hữu (residentId)' });
+      }
+    } else {
+      setEvnMockInfo({ loading: false, data: null, error: null });
+    }
+  }, [modalOpen, modalMode, formData.apartmentId, tableFees, selectedFeeIndex, apartments]);
+
+  const handleTierEdit = (tier) => {
+    setEditingTierId(tier.id);
+    setTierForm({
+      tierOrder: tier.tierOrder != null ? String(tier.tierOrder) : '',
+      limitValue: tier.limitValue != null ? String(tier.limitValue) : '',
+      unitPrice: tier.unitPrice != null ? String(tier.unitPrice) : '',
+    });
+  };
+
+  const handleTierCancel = () => {
+    setEditingTierId(null);
+    setTierForm({ tierOrder: '', limitValue: '', unitPrice: '' });
+  };
+
+  const handleTierSave = async (id) => {
+    try {
+      const params = {
+        tierOrder: Number(tierForm.tierOrder) || 0,
+        limitValue: tierForm.limitValue ? Number(tierForm.limitValue) : null,
+        unitPrice: Number(tierForm.unitPrice) || 0,
+      };
+      if (id === 'new') {
+        await tableElectricTierService.create(params);
+        toast.success("Thêm bậc điện thành công!");
+      } else {
+        await tableElectricTierService.update(id, params);
+        toast.success("Cập nhật bậc điện thành công!");
+      }
+      setEditingTierId(null);
+      fetchGlobalTiers();
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Có lỗi xảy ra khi lưu bậc.');
+      console.error(err);
+    }
+  };
+
+  const handleTierDelete = async (id) => {
+    if (!window.confirm("Bạn có chắc muốn xóa bậc điện này?")) return;
+    try {
+      await tableElectricTierService.delete(id);
+      toast.success("Xóa bậc điện thành công!");
+      fetchGlobalTiers();
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Có lỗi xảy ra khi xóa bậc.');
+      console.error(err);
+    }
+  };
+
   useEffect(() => { fetchInvoices(); }, [fetchInvoices]);
   useEffect(() => { fetchApartments(); }, [fetchApartments]);
   useEffect(() => { fetchTableFees(); }, [fetchTableFees]);
@@ -248,6 +351,7 @@ export default function InvoicesPage() {
         managementFee: activeFee.managementFee ? String(activeFee.managementFee) : '',
         parkingFee: activeFee.parkingFee ? String(activeFee.parkingFee) : '',
         otherFee: activeFee.otherFee ? String(activeFee.otherFee) : '0',
+        descriptionOtherFee: activeFee.descriptionOtherFee || '',
       }));
     }
   }, [selectedFeeIndex, modalOpen, activeFee]);
@@ -268,10 +372,16 @@ export default function InvoicesPage() {
     const dd = String(nextMonthDate.getDate()).padStart(2, '0');
     const defaultDueDate = `${yyyy}-${mm}-${dd}`;
     
+    // Ngày hiện tại
+    const s_yyyy = today.getFullYear();
+    const s_mm = String(today.getMonth() + 1).padStart(2, '0');
+    const s_dd = String(today.getDate()).padStart(2, '0');
+    const defaultStartDate = `${s_yyyy}-${s_mm}-${s_dd}`;
+    
     setFormData({
       invoiceNumber: '', dueDate: defaultDueDate, electricFee: '', waterFee: '',
-      managementFee: '', parkingFee: '', otherFee: '', apartmentId: '', invoiceStatus: 'UNPAID',
-      electricQuantity: '', waterQuantity: '',
+      managementFee: '', parkingFee: '', otherFee: '', descriptionOtherFee: '', apartmentId: '', invoiceStatus: 'UNPAID',
+      electricQuantity: '', waterQuantity: '', electricStartDate: defaultStartDate, electricEndDate: defaultDueDate, numberOfHouseholds: '1',
     });
     setFormErrors({});
     setAptFilterBlock('');
@@ -301,10 +411,14 @@ export default function InvoicesPage() {
       managementFee: inv.managementFee != null ? String(inv.managementFee) : '',
       parkingFee: inv.parkingFee != null ? String(inv.parkingFee) : '',
       otherFee: inv.otherFee != null ? String(inv.otherFee) : '',
+      descriptionOtherFee: inv.descriptionOtherFee || '',
       apartmentId: inv.apartment?.id || inv.apartmentId || '',
       invoiceStatus: inv.invoiceStatus || 'UNPAID',
       electricQuantity: eq,
       waterQuantity: wq,
+      electricStartDate: '',
+      electricEndDate: '',
+      numberOfHouseholds: '1',
     });
     setFormErrors({});
     setAptFilterBlock('');
@@ -335,9 +449,13 @@ export default function InvoicesPage() {
       }
       
       // Auto-calculate electricFee when electricQuantity changes
-      if (field === 'electricQuantity' && activeFee && activeFee.electricFee > 0) {
-        const qty = Number(updated.electricQuantity);
-        updated.electricFee = qty > 0 ? String(qty * Number(activeFee.electricFee)) : '';
+      if (field === 'electricQuantity' && activeFee) {
+        if (!activeFee.useTieredElectric && activeFee.electricFee > 0) {
+          const qty = Number(updated.electricQuantity);
+          updated.electricFee = qty > 0 ? String(qty * Number(activeFee.electricFee)) : '';
+        } else if (activeFee.useTieredElectric) {
+          updated.electricFee = '';
+        }
       }
       
       // Auto-calculate waterFee when waterQuantity changes
@@ -356,8 +474,38 @@ export default function InvoicesPage() {
     if (!formData.invoiceNumber.trim()) errors.invoiceNumber = 'Vui lòng nhập số hóa đơn';
     if (!formData.dueDate) errors.dueDate = 'Vui lòng chọn hạn thanh toán';
     if (modalMode === 'create' && !formData.apartmentId) errors.apartmentId = 'Vui lòng chọn căn hộ';
+    if (activeFee?.useTieredElectric && formData.electricQuantity && !formData.electricFee) {
+      toast.error('Vui lòng Bấm "Tính phí" điện bậc thang trước khi lưu');
+      return false;
+    }
     setFormErrors(errors);
     return Object.keys(errors).length === 0;
+  };
+
+  const handleCalculateElectric = async () => {
+    if (!formData.electricQuantity || !formData.electricStartDate || !formData.electricEndDate) {
+      toast.error("Vui lòng điền đầy đủ số lượng, ngày bắt đầu và kết thúc.");
+      return;
+    }
+    setIsCalculatingElectric(true);
+    try {
+      const res = await tableElectricTierService.calculator(
+        Number(formData.electricQuantity),
+        formData.electricStartDate,
+        formData.electricEndDate,
+        Number(formData.numberOfHouseholds) || 1
+      );
+      if (res.data?.status !== false) {
+        setFormData(p => ({ ...p, electricFee: String(res.data.data || 0) }));
+        toast.success("Tính phí điện thành công!");
+      } else {
+        toast.error(res.data?.message || "Không thể tính phí điện");
+      }
+    } catch(err) {
+      toast.error(err.response?.data?.message || "Lỗi khi tính phí điện");
+    } finally {
+      setIsCalculatingElectric(false);
+    }
   };
 
   const handleSubmit = async (e) => {
@@ -400,6 +548,7 @@ export default function InvoicesPage() {
       if (formData.managementFee) payload.managementFee = Number(formData.managementFee);
       if (formData.parkingFee) payload.parkingFee = Number(formData.parkingFee);
       if (formData.otherFee) payload.otherFee = Number(formData.otherFee);
+      if (formData.descriptionOtherFee) payload.descriptionOtherFee = formData.descriptionOtherFee.trim();
 
       let res;
       if (modalMode === 'create') {
@@ -448,8 +597,9 @@ export default function InvoicesPage() {
     try {
       toast.info('Đang tạo liên kết thanh toán VNPay...');
       const res = await paymentService.createVnpayPayment(invoiceId);
-      const paymentUrl = res.data;
-      if (paymentUrl) {
+      // Backend mới trả về ApiResponse nên URL nằm trong res.data.data
+      const paymentUrl = res.data?.data;
+      if (paymentUrl && typeof paymentUrl === 'string' && paymentUrl.startsWith('http')) {
         window.open(paymentUrl, '_blank');
       } else {
         toast.error('Không thể tạo liên kết thanh toán');
@@ -465,7 +615,7 @@ export default function InvoicesPage() {
   };
 
   /* ─── Table Fee handlers ─── */
-  const openTableFeeEdit = (fee, index) => {
+  const openTableFeeEdit = async (fee, index) => {
     setEditingFee(fee ? { ...fee, _index: index } : null);
     setTableFeeForm({
       title: fee?.title || '',
@@ -474,7 +624,13 @@ export default function InvoicesPage() {
       managementFee: fee?.managementFee != null ? String(fee.managementFee) : '',
       parkingFee: fee?.parkingFee != null ? String(fee.parkingFee) : '',
       otherFee: fee?.otherFee != null ? String(fee.otherFee) : '',
+      descriptionOtherFee: fee?.descriptionOtherFee || '',
     });
+    
+    setUseTieredElectric(!!fee?.useTieredElectric);
+    
+    fetchGlobalTiers();
+    
     setTableFeeEditOpen(true);
   };
 
@@ -484,11 +640,13 @@ export default function InvoicesPage() {
     try {
       const params = {
         title: tableFeeForm.title.trim(),
-        electricFee: Number(tableFeeForm.electricFee) || 0,
+        electricFee: useTieredElectric ? 0 : (Number(tableFeeForm.electricFee) || 0),
         waterFee: Number(tableFeeForm.waterFee) || 0,
         managementFee: Number(tableFeeForm.managementFee) || 0,
         parkingFee: Number(tableFeeForm.parkingFee) || 0,
         otherFee: Number(tableFeeForm.otherFee) || 0,
+        descriptionOtherFee: tableFeeForm.descriptionOtherFee?.trim() || '',
+        useTieredElectric: useTieredElectric,
       };
 
       let res;
@@ -558,7 +716,7 @@ export default function InvoicesPage() {
   const feeTableRows = activeFee ? [
     { label: 'Phí quản lý căn hộ', sub: 'Phí duy trì hoạt động chung cư', value: activeFee.managementFee, unit: 'tháng' },
     { label: 'Phí gửi xe', sub: 'Ô tô, xe máy, xe đạp', value: activeFee.parkingFee, unit: 'tháng' },
-    { label: 'Điện', sub: 'Tiêu thụ điện năng', value: activeFee.electricFee, unit: 'kWh' },
+    { label: 'Điện', sub: 'Tiêu thụ điện năng', value: activeFee.electricFee, unit: 'kWh', isTiered: activeFee.useTieredElectric },
     { label: 'Nước', sub: 'Tiêu thụ nước', value: activeFee.waterFee, unit: 'm³' },
     { label: 'Phí khác', sub: 'Các phí phát sinh khác', value: activeFee.otherFee, unit: 'tháng' },
   ] : [];
@@ -721,7 +879,7 @@ export default function InvoicesPage() {
                   {row.label}
                 </div>
                 <div style={{ fontSize: '0.95rem', fontWeight: 600, color: '#1d4ed8' }}>
-                  {shortMoney(row.value)}/{row.unit}
+                  {row.isTiered ? 'Lũy tiến (Bậc thang)' : `${shortMoney(row.value)}/${row.unit}`}
                 </div>
               </div>
             ))}
@@ -863,7 +1021,7 @@ export default function InvoicesPage() {
       {/* ═══════════ CREATE / EDIT INVOICE MODAL ═══════════ */}
       {modalOpen && (modalMode === 'create' || modalMode === 'edit') && (
         <div className="modal-overlay" onClick={() => setModalOpen(false)}>
-          <div className="modal" onClick={(e) => e.stopPropagation()}>
+          <div className="modal" style={{ maxWidth: '850px', width: '95%' }} onClick={(e) => e.stopPropagation()}>
             <div className="modal__header">
               <h3 className="modal__title">{modalMode === 'create' ? 'Tạo hóa đơn mới' : 'Chỉnh sửa hóa đơn'}</h3>
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
@@ -948,134 +1106,7 @@ export default function InvoicesPage() {
             </div>
             <form onSubmit={handleSubmit} className="modal__body">
               <div className="form-grid">
-                {/* Invoice number */}
-                <div className="form-field">
-                  <label className="form-label">Số hóa đơn <span className="form-required">*</span></label>
-                  <input
-                    className={`form-input ${formErrors.invoiceNumber ? 'form-input--error' : ''}`}
-                    value={formData.invoiceNumber}
-                    onChange={(e) => handleFormChange('invoiceNumber', e.target.value)}
-                    placeholder="VD: HD-001"
-                  />
-                  {formErrors.invoiceNumber && <span className="form-error">{formErrors.invoiceNumber}</span>}
-                </div>
-
-                {/* Due date */}
-                <div className="form-field">
-                  <label className="form-label">Hạn thanh toán <span className="form-required">*</span></label>
-                  <DatePicker
-                    selected={formData.dueDate ? new Date(formData.dueDate) : null}
-                    onChange={(date) => handleFormChange('dueDate', date ? date.toISOString().substring(0, 10) : '')}
-                    dateFormat="dd/MM/yyyy"
-                    locale="vi"
-                    placeholderText="dd/MM/yyyy"
-                    className={`form-input ${formErrors.dueDate ? 'form-input--error' : ''}`}
-                    isClearable
-                  />
-                  {formErrors.dueDate && <span className="form-error">{formErrors.dueDate}</span>}
-                </div>
-
-                {/* Electric fee */}
-                {/* Electric quantity */}
-                <div className="form-field">
-                  <label className="form-label" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    Tiền điện (VNĐ)
-                    {activeFee && activeFee.electricFee > 0 && (
-                      <span style={{ color: '#e74c3c', fontSize: '0.8rem', fontWeight: 600 }}>
-                        {shortMoney(activeFee.electricFee)}/kWh
-                      </span>
-                    )}
-                  </label>
-                  <input 
-                    type="text" 
-                    className="form-input" 
-                    value={formatInputCurrency(formData.electricQuantity)}
-                    onChange={(e) => handleFormChange('electricQuantity', parseInputCurrency(e.target.value))}
-                    placeholder="Nhập số điện tiêu thụ" 
-                  />
-                </div>
-
-                {/* Water quantity */}
-                <div className="form-field">
-                  <label className="form-label" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    Tiền nước (VNĐ)
-                    {activeFee && activeFee.waterFee > 0 && (
-                      <span style={{ color: '#e74c3c', fontSize: '0.8rem', fontWeight: 600 }}>
-                        {shortMoney(activeFee.waterFee)}/m³
-                      </span>
-                    )}
-                  </label>
-                  <input 
-                    type="text" 
-                    className="form-input" 
-                    value={formatInputCurrency(formData.waterQuantity)}
-                    onChange={(e) => handleFormChange('waterQuantity', parseInputCurrency(e.target.value))}
-                    placeholder="Nhập số nước tiêu thụ" 
-                  />
-                </div>
-
-                {/* Electric fee (auto-calculated) */}
-                <div className="form-field">
-                  <label className="form-label">Tổng tiền điện (VNĐ)</label>
-                  <input 
-                    type="text" 
-                    className="form-input" 
-                    value={formatInputCurrency(formData.electricFee)}
-                    readOnly
-                    placeholder="Tự động tính từ số điện" 
-                    style={{ background: '#d1fae5', color: '#047857', cursor: 'not-allowed', fontWeight: 600 }}
-                  />
-                </div>
-
-                {/* Water fee (auto-calculated) */}
-                <div className="form-field">
-                  <label className="form-label">Tổng tiền nước (VNĐ)</label>
-                  <input 
-                    type="text" 
-                    className="form-input" 
-                    value={formatInputCurrency(formData.waterFee)}
-                    readOnly
-                    placeholder="Tự động tính từ số nước" 
-                    style={{ background: '#d1fae5', color: '#047857', cursor: 'not-allowed', fontWeight: 600 }}
-                  />
-                </div>
-                {/* Management fee */}
-                <div className="form-field">
-                  <label className="form-label">Phí quản lý (VNĐ)</label>
-                  <input type="text" className="form-input" value={formatInputCurrency(formData.managementFee)}
-                    onChange={(e) => handleFormChange('managementFee', parseInputCurrency(e.target.value))}
-                    placeholder={activeFee ? 'Tự động fill phí quản lý từ phí dịch vụ' : '0'} />
-                </div>
-                {/* Parking fee */}
-                <div className="form-field">
-                  <label className="form-label" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    Phí gửi xe (VNĐ)
-                  </label>
-                  <input type="text" className="form-input" value={formatInputCurrency(formData.parkingFee)}
-                    onChange={(e) => handleFormChange('parkingFee', parseInputCurrency(e.target.value))}
-                    placeholder={activeFee ? 'Tự động fill phí gửi xe từ bảng phí dịch vụ' : '0'} />
-                </div>
-                {/* Other fee */}
-                <div className="form-field form-field--full">
-                  <label className="form-label">Phí khác (VNĐ)</label>
-                  <input type="text" className="form-input" value={formatInputCurrency(formData.otherFee)}
-                    onChange={(e) => handleFormChange('otherFee', parseInputCurrency(e.target.value))}
-                    placeholder={activeFee ? 'Tự động fill phí khác từ bảng phí dịch vụ' : '0'} />
-                </div>
-
-                {/* Status (edit only) */}
-                {modalMode === 'edit' && (
-                  <div className="form-field">
-                    <label className="form-label">Trạng thái</label>
-                    <select className="form-select" value={formData.invoiceStatus}
-                      onChange={(e) => handleFormChange('invoiceStatus', e.target.value)}>
-                      <option value="UNPAID">Chưa thanh toán</option>
-                      <option value="PAID">Đã thanh toán</option>
-                    </select>
-                  </div>
-                )}
-
-                {/* Apartment selection (create only) */}
+                {/* 1. Apartment selection (create only) */}
                 {modalMode === 'create' && (() => {
                   const blocks = [...new Set(apartments.map(a => a.block).filter(Boolean))].sort();
                   const floors = [...new Set(apartments.map(a => a.floor).filter(v => v != null))].sort((a, b) => a - b);
@@ -1085,43 +1116,253 @@ export default function InvoicesPage() {
                     return true;
                   });
                   return (
-                    <div className="form-field form-field--full">
-                      <label className="form-label">Căn hộ <span className="form-required">*</span></label>
-                      <div style={{ display: 'flex', gap: '0.75rem', marginBottom: '0.75rem' }}>
-                        <select className="form-select" value={aptFilterBlock} onChange={(e) => setAptFilterBlock(e.target.value)} style={{ flex: 1 }}>
-                          <option value="">Tất cả tòa nhà</option>
-                          {blocks.map(b => <option key={b} value={b}>Tòa {b}</option>)}
-                        </select>
-                        <select className="form-select" value={aptFilterFloor} onChange={(e) => setAptFilterFloor(e.target.value)} style={{ flex: 1 }}>
-                          <option value="">Tất cả tầng</option>
-                          {floors.map(f => <option key={f} value={f}>Tầng {f}</option>)}
-                        </select>
+                    <div className="form-field form-field--full" style={{ padding: 0, background: '#ffffff', borderRadius: '8px', border: '1px solid #cbd5e1', marginBottom: 0, overflow: 'hidden', boxShadow: '0 2px 4px rgba(0,0,0,0.02)' }}>
+                      <div style={{ background: '#f1f5f9', padding: '0.85rem 1.25rem', borderBottom: '1px solid #cbd5e1', fontWeight: 600, color: '#0f172a', fontSize: '1.05rem', display: 'flex', alignItems: 'center' }}>
+                        1. Đối tượng áp dụng <span className="form-required" style={{ marginLeft: 4 }}>*</span>
                       </div>
-                      <div className="resident-select">
-                        {filteredApts.length === 0 ? (
-                          <p className="resident-select__empty">Không tìm thấy căn hộ nào</p>
-                        ) : (
-                          <div className="resident-select__grid">
-                            {filteredApts.map((apt) => {
-                              const selected = String(formData.apartmentId) === String(apt.id);
-                              return (
-                                <label key={apt.id} className={`resident-select__item ${selected ? 'resident-select__item--active' : ''}`}>
-                                  <input type="radio" name="apartmentSelect" checked={selected}
-                                    onChange={() => handleFormChange('apartmentId', apt.id)} className="resident-select__checkbox" />
-                                  <div className="resident-select__info">
-                                    <span className="resident-select__name">Căn {apt.apartmentNumber}</span>
-                                    <span className="resident-select__sub">{apt.block ? `Tòa ${apt.block} · ` : ''}Tầng {apt.floor}{apt.area ? ` · ${apt.area}m²` : ''}</span>
-                                  </div>
-                                </label>
-                              );
-                            })}
-                          </div>
-                        )}
+                      <div style={{ padding: '1.25rem' }}>
+                        <div style={{ display: 'flex', gap: '0.75rem', marginBottom: '0.75rem' }}>
+                          <select className="form-select" value={aptFilterBlock} onChange={(e) => setAptFilterBlock(e.target.value)} style={{ flex: 1 }}>
+                            <option value="">Tất cả tòa nhà</option>
+                            {blocks.map(b => <option key={b} value={b}>Tòa {b}</option>)}
+                          </select>
+                          <select className="form-select" value={aptFilterFloor} onChange={(e) => setAptFilterFloor(e.target.value)} style={{ flex: 1 }}>
+                            <option value="">Tất cả tầng</option>
+                            {floors.map(f => <option key={f} value={f}>Tầng {f}</option>)}
+                          </select>
+                        </div>
+                        <div className="resident-select">
+                          {filteredApts.length === 0 ? (
+                            <p className="resident-select__empty">Không tìm thấy căn hộ nào</p>
+                          ) : (
+                            <div className="resident-select__grid" style={{ maxHeight: '180px' }}>
+                              {filteredApts.map((apt) => {
+                                const selected = String(formData.apartmentId) === String(apt.id);
+                                return (
+                                  <label key={apt.id} className={`resident-select__item ${selected ? 'resident-select__item--active' : ''}`}>
+                                    <input type="radio" name="apartmentSelect" checked={selected}
+                                      onChange={() => handleFormChange('apartmentId', apt.id)} className="resident-select__checkbox" />
+                                    <div className="resident-select__info">
+                                      <span className="resident-select__name">Căn {apt.apartmentNumber}</span>
+                                      <span className="resident-select__sub">{apt.block ? `Tòa ${apt.block} · ` : ''}Tầng {apt.floor}{apt.area ? ` · ${apt.area}m²` : ''}</span>
+                                    </div>
+                                  </label>
+                                );
+                              })}
+                            </div>
+                          )}
+                        </div>
+                        {formErrors.apartmentId && <span className="form-error">{formErrors.apartmentId}</span>}
                       </div>
-                      {formErrors.apartmentId && <span className="form-error">{formErrors.apartmentId}</span>}
                     </div>
                   );
                 })()}
+
+                {/* 2. Invoice Info */}
+                <div className="form-field form-field--full" style={{ padding: 0, background: '#ffffff', borderRadius: '8px', border: '1px solid #cbd5e1', marginBottom: 0, overflow: 'hidden', boxShadow: '0 2px 4px rgba(0,0,0,0.02)' }}>
+                  <div style={{ background: '#f1f5f9', padding: '0.85rem 1.25rem', borderBottom: '1px solid #cbd5e1', fontWeight: 600, color: '#0f172a', fontSize: '1.05rem' }}>
+                    {modalMode === 'create' ? '2' : '1'}. Thông tin chứng từ
+                  </div>
+                  <div style={{ padding: '1.25rem', display: 'grid', gridTemplateColumns: 'minmax(0,1fr) minmax(0,1fr) minmax(0,1fr)', gap: '1rem' }}>
+                    <div className="form-field" style={{ marginBottom: 0 }}>
+                      <label className="form-label">Số hóa đơn <span className="form-required">*</span></label>
+                      <input
+                        className={`form-input ${formErrors.invoiceNumber ? 'form-input--error' : ''}`}
+                        value={formData.invoiceNumber}
+                        onChange={(e) => handleFormChange('invoiceNumber', e.target.value)}
+                        placeholder="VD: HD-001"
+                      />
+                      {formErrors.invoiceNumber && <span className="form-error">{formErrors.invoiceNumber}</span>}
+                    </div>
+
+                    <div className="form-field" style={{ marginBottom: 0 }}>
+                      <label className="form-label">Hạn thanh toán <span className="form-required">*</span></label>
+                      <DatePicker
+                        selected={formData.dueDate ? new Date(formData.dueDate) : null}
+                        onChange={(date) => handleFormChange('dueDate', date ? date.toISOString().substring(0, 10) : '')}
+                        dateFormat="dd/MM/yyyy"
+                        locale="vi"
+                        placeholderText="dd/MM/yyyy"
+                        className={`form-input ${formErrors.dueDate ? 'form-input--error' : ''}`}
+                        isClearable
+                      />
+                      {formErrors.dueDate && <span className="form-error">{formErrors.dueDate}</span>}
+                    </div>
+
+                    {/* Status (edit only) */}
+                    {modalMode === 'edit' ? (
+                      <div className="form-field" style={{ marginBottom: 0 }}>
+                        <label className="form-label">Trạng thái</label>
+                        <select className="form-select" value={formData.invoiceStatus}
+                          onChange={(e) => handleFormChange('invoiceStatus', e.target.value)}>
+                          <option value="UNPAID">Chưa thanh toán</option>
+                          <option value="PAID">Đã thanh toán</option>
+                        </select>
+                      </div>
+                    ) : ( <div /> )}
+                  </div>
+                </div>
+
+                {/* 3. Electric & Water Consumption */}
+                <div className="form-field form-field--full" style={{ padding: 0, background: '#ffffff', borderRadius: '8px', border: '1px solid #cbd5e1', marginBottom: 0, overflow: 'hidden', boxShadow: '0 2px 4px rgba(0,0,0,0.02)' }}>
+                  <div style={{ background: '#f1f5f9', padding: '0.85rem 1.25rem', borderBottom: '1px solid #cbd5e1', fontWeight: 600, color: '#0f172a', fontSize: '1.05rem' }}>
+                    {modalMode === 'create' ? '3' : '2'}. Dịch vụ Điện nước
+                  </div>
+                  <div style={{ padding: '1.25rem' }}>
+                    {/* ELECTRIC SECTION */}
+                    {activeFee && activeFee.useTieredElectric ? (
+                      <div style={{ marginBottom: '1.5rem', padding: '1.25rem', background: '#f8fafc', borderRadius: 8, border: '1px solid #e2e8f0', display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                        <div style={{ fontWeight: 600, color: '#1d4ed8', fontSize: '0.95rem', marginBottom: '0.25rem' }}>Tính phí điện (Bậc thang)</div>
+                        <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1fr) minmax(0,1fr) minmax(0,1fr)', gap: '0.75rem' }}>
+                          <div className="form-field" style={{ marginBottom: 0 }}>
+                            <label className="form-label" style={{ fontSize: '0.8rem' }}>Từ ngày</label>
+                            <DatePicker
+                              selected={formData.electricStartDate ? new Date(formData.electricStartDate) : null}
+                              onChange={(date) => handleFormChange('electricStartDate', date ? date.toISOString().substring(0, 10) : '')}
+                              dateFormat="dd/MM/yyyy"
+                              locale="vi"
+                              placeholderText="dd/MM/yyyy"
+                              className="form-input"
+                              isClearable
+                            />
+                          </div>
+                          <div className="form-field" style={{ marginBottom: 0 }}>
+                            <label className="form-label" style={{ fontSize: '0.8rem' }}>Đến ngày</label>
+                            <DatePicker
+                              selected={formData.electricEndDate ? new Date(formData.electricEndDate) : null}
+                              onChange={(date) => handleFormChange('electricEndDate', date ? date.toISOString().substring(0, 10) : '')}
+                              dateFormat="dd/MM/yyyy"
+                              locale="vi"
+                              placeholderText="dd/MM/yyyy"
+                              className="form-input"
+                              isClearable
+                            />
+                          </div>
+                          <div className="form-field" style={{ marginBottom: 0 }}>
+                            <label className="form-label" style={{ fontSize: '0.8rem' }}>Số hộ chung công tơ</label>
+                            <input type="number" className="form-input" value={formData.numberOfHouseholds} onChange={(e) => handleFormChange('numberOfHouseholds', e.target.value)} min="1" step="1" />
+                          </div>
+                        </div>
+                        <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1fr) minmax(0,1fr)', gap: '1rem', alignItems: 'start' }}>
+                          <div className="form-field" style={{ marginBottom: 0 }}>
+                            <label className="form-label" style={{ fontSize: '0.8rem' }}>Số điện tiêu thụ (kWh)</label>
+                            <input 
+                              type="text" 
+                              className="form-input" 
+                              value={formatInputCurrency(formData.electricQuantity)} 
+                              onChange={(e) => handleFormChange('electricQuantity', parseInputCurrency(e.target.value))} 
+                              placeholder="Nhập số điện..." 
+                              readOnly={!!(!evnMockInfo.loading && evnMockInfo.data)}
+                              style={{ background: (!evnMockInfo.loading && evnMockInfo.data) ? '#f1f5f9' : '#fff' }}
+                            />
+                            {modalMode === 'create' && activeFee?.useTieredElectric && formData.apartmentId && (
+                               <div style={{ marginTop: '0.5rem', fontSize: '0.75rem', fontWeight: 500 }}>
+                                  {evnMockInfo.loading && <span style={{ color: '#d97706' }}>Đang kết nối API EVN NPC...</span>}
+                                  {!evnMockInfo.loading && evnMockInfo.error && <span style={{ color: '#dc2626' }}>{evnMockInfo.error}</span>}
+                                  {!evnMockInfo.loading && evnMockInfo.data && (
+                                      <span style={{ color: '#059669' }}>
+                                        ✓ EVN NPC: {evnMockInfo.data.customerName || 'N/A'} - {evnMockInfo.data.kwhConsumed} kWh (Kỳ: {evnMockInfo.data.billingPeriod || 'N/A'})
+                                      </span>
+                                  )}
+                               </div>
+                            )}
+                          </div>
+                          <div className="form-field" style={{ marginBottom: 0 }}>
+                            <label className="form-label" style={{ fontSize: '0.8rem', color: '#047857' }}>Tổng tiền điện (VNĐ)</label>
+                            <div style={{ display: 'flex', gap: '0.75rem' }}>
+                              <input type="text" className="form-input" value={formatInputCurrency(formData.electricFee)} readOnly placeholder="Nhấp Tính phí..." style={{ background: '#d1fae5', color: '#047857', cursor: 'default', fontWeight: 600, flex: 1 }} />
+                              <button type="button" className="btn btn--primary" style={{ padding: '0.55rem 1.25rem', height: '38px', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }} onClick={handleCalculateElectric} disabled={isCalculatingElectric || !formData.electricQuantity || !formData.electricStartDate || !formData.electricEndDate}>
+                                {isCalculatingElectric ? <div className="spinner" style={{width: 16, height: 16, margin: 0}} /> : "Tính phí"}
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    ) : (
+                      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1fr) minmax(0,1fr)', gap: '1rem', marginBottom: '1.5rem', paddingBottom: '1.5rem', borderBottom: '1px dashed #cbd5e1' }}>
+                        <div className="form-field" style={{ marginBottom: 0 }}>
+                          <label className="form-label" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                            Điện tiêu thụ (kWh)
+                            {activeFee && activeFee.electricFee > 0 && (
+                              <span style={{ color: '#e74c3c', fontSize: '0.8rem', fontWeight: 600 }}>
+                                {shortMoney(activeFee.electricFee)}/kWh
+                              </span>
+                            )}
+                          </label>
+                          <input 
+                            type="text" 
+                            className="form-input" 
+                            value={formatInputCurrency(formData.electricQuantity)}
+                            onChange={(e) => handleFormChange('electricQuantity', parseInputCurrency(e.target.value))}
+                            placeholder="Nhập số điện..." 
+                          />
+                        </div>
+                        <div className="form-field" style={{ marginBottom: 0 }}>
+                          <label className="form-label" style={{ color: '#047857' }}>Tổng tiền điện (VNĐ)</label>
+                          <input type="text" className="form-input" value={formatInputCurrency(formData.electricFee)} readOnly placeholder="Tự động tính từ số điện" style={{ background: '#d1fae5', color: '#047857', cursor: 'default', fontWeight: 600 }} />
+                        </div>
+                      </div>
+                    )}
+
+                    {/* WATER SECTION */}
+                    <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1fr) minmax(0,1fr)', gap: '1rem' }}>
+                      <div className="form-field" style={{ marginBottom: 0 }}>
+                        <label className="form-label" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                          Nước tiêu thụ (m³)
+                          {activeFee && activeFee.waterFee > 0 && (
+                            <span style={{ color: '#e74c3c', fontSize: '0.8rem', fontWeight: 600 }}>
+                              {shortMoney(activeFee.waterFee)}/m³
+                            </span>
+                          )}
+                        </label>
+                        <input 
+                          type="text" 
+                          className="form-input" 
+                          value={formatInputCurrency(formData.waterQuantity)}
+                          onChange={(e) => handleFormChange('waterQuantity', parseInputCurrency(e.target.value))}
+                          placeholder="Nhập số khối nước..." 
+                        />
+                      </div>
+                      <div className="form-field" style={{ marginBottom: 0 }}>
+                        <label className="form-label" style={{ color: '#047857' }}>Tổng tiền nước (VNĐ)</label>
+                        <input type="text" className="form-input" value={formatInputCurrency(formData.waterFee)} readOnly placeholder="Tự động tính từ chỉ số" style={{ background: '#d1fae5', color: '#047857', cursor: 'default', fontWeight: 600 }} />
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* 4. Other Fees */}
+                <div className="form-field form-field--full" style={{ padding: 0, background: '#ffffff', borderRadius: '8px', border: '1px solid #cbd5e1', marginBottom: 0, overflow: 'hidden', boxShadow: '0 2px 4px rgba(0,0,0,0.02)' }}>
+                  <div style={{ background: '#f1f5f9', padding: '0.85rem 1.25rem', borderBottom: '1px solid #cbd5e1', fontWeight: 600, color: '#0f172a', fontSize: '1.05rem' }}>
+                    {modalMode === 'create' ? '4' : '3'}. Các loại phí khác
+                  </div>
+                  <div style={{ padding: '1.25rem', display: 'grid', gridTemplateColumns: 'minmax(0,1fr) minmax(0,1fr)', gap: '1rem' }}>
+                    <div className="form-field" style={{ marginBottom: 0 }}>
+                      <label className="form-label">Phí quản lý (VNĐ)</label>
+                      <input type="text" className="form-input" value={formatInputCurrency(formData.managementFee)}
+                        onChange={(e) => handleFormChange('managementFee', parseInputCurrency(e.target.value))}
+                        placeholder={activeFee ? 'Từ phí dịch vụ' : '0'} />
+                    </div>
+                    <div className="form-field" style={{ marginBottom: 0 }}>
+                      <label className="form-label">Phí gửi xe (VNĐ)</label>
+                      <input type="text" className="form-input" value={formatInputCurrency(formData.parkingFee)}
+                        onChange={(e) => handleFormChange('parkingFee', parseInputCurrency(e.target.value))}
+                        placeholder={activeFee ? 'Từ bảng phí dịch vụ' : '0'} />
+                    </div>
+                    <div className="form-field" style={{ marginBottom: 0 }}>
+                      <label className="form-label">Phí phát sinh (VNĐ)</label>
+                      <input type="text" className="form-input" value={formatInputCurrency(formData.otherFee)}
+                        onChange={(e) => handleFormChange('otherFee', parseInputCurrency(e.target.value))}
+                        placeholder={activeFee ? 'Từ bảng phí dịch vụ' : '0'} />
+                    </div>
+                    <div className="form-field" style={{ marginBottom: 0, gridColumn: '1 / -1' }}>
+                      <label className="form-label">Mô tả (Phí phát sinh)</label>
+                      <textarea className="form-input" value={formData.descriptionOtherFee || ''}
+                        onChange={(e) => handleFormChange('descriptionOtherFee', e.target.value)}
+                        placeholder="VD: Phí sửa vòi nước..." rows="3" style={{ resize: 'vertical' }} />
+                    </div>
+                  </div>
+                </div>
               </div>
 
               <div className="modal__footer">
@@ -1328,7 +1569,7 @@ export default function InvoicesPage() {
       {/* ═══════════ TABLE FEE EDIT MODAL ═══════════ */}
       {tableFeeEditOpen && (
         <div className="modal-overlay" onClick={() => setTableFeeEditOpen(false)}>
-          <div className="modal modal--sm" onClick={(e) => e.stopPropagation()}>
+          <div className="modal" style={{ maxWidth: '650px', width: '95%' }} onClick={(e) => e.stopPropagation()}>
             <div className="modal__header">
               <h3 className="modal__title">{editingFee ? 'Chỉnh sửa bảng phí dịch vụ' : 'Tạo bảng phí dịch vụ'}</h3>
               <button className="modal__close" onClick={() => setTableFeeEditOpen(false)}>{Icons.close}</button>
@@ -1341,11 +1582,148 @@ export default function InvoicesPage() {
                     onChange={(e) => setTableFeeForm(p => ({ ...p, title: e.target.value }))}
                     placeholder="VD: Bảng phí dịch vụ cho toàn bộ Chung Cư" />
                 </div>
-                <div className="form-field">
-                  <label className="form-label">Phí điện (VNĐ/kWh)</label>
-                  <input type="text" className="form-input" value={formatInputCurrency(tableFeeForm.electricFee)}
-                    onChange={(e) => setTableFeeForm(p => ({ ...p, electricFee: parseInputCurrency(e.target.value) }))} placeholder="0" />
+                <div className="form-field form-field--full">
+                  <label className="form-label" style={{ fontSize: '0.8rem' }}>Phương thức tính tiền điện</label>
+                  <div style={{ display: 'flex', background: '#e2e8f0', padding: '4px', borderRadius: '6px' }}>
+                    <button
+                      type="button"
+                      style={{
+                        flex: 1, padding: '0.4rem', borderRadius: '4px', border: 'none',
+                        background: !useTieredElectric ? '#fff' : 'transparent',
+                        color: !useTieredElectric ? '#0f172a' : '#475569',
+                        fontWeight: !useTieredElectric ? 600 : 500,
+                        fontSize: '0.8rem',
+                        boxShadow: !useTieredElectric ? '0 1px 3px rgba(0,0,0,0.1), 0 1px 2px rgba(0,0,0,0.06)' : 'none',
+                        transition: 'all 0.15s ease', cursor: 'pointer',
+                        display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.35rem'
+                      }}
+                      onClick={() => setUseTieredElectric(false)}
+                    >
+                      <span style={{ 
+                        width: 12, height: 12, borderRadius: '50%', border: '3px solid', 
+                        borderColor: !useTieredElectric ? '#3b82f6' : '#94a3b8',
+                        background: '#fff'
+                      }}></span>
+                      Cố định (Một giá)
+                    </button>
+                    <button
+                      type="button"
+                      style={{
+                        flex: 1, padding: '0.4rem', borderRadius: '4px', border: 'none',
+                        background: useTieredElectric ? '#fff' : 'transparent',
+                        color: useTieredElectric ? '#0f172a' : '#475569',
+                        fontWeight: useTieredElectric ? 600 : 500,
+                        fontSize: '0.8rem',
+                        boxShadow: useTieredElectric ? '0 1px 3px rgba(0,0,0,0.1), 0 1px 2px rgba(0,0,0,0.06)' : 'none',
+                        transition: 'all 0.15s ease', cursor: 'pointer',
+                        display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.35rem'
+                      }}
+                      onClick={() => setUseTieredElectric(true)}
+                    >
+                      <span style={{ 
+                        width: 12, height: 12, borderRadius: '50%', border: '3px solid', 
+                        borderColor: useTieredElectric ? '#3b82f6' : '#94a3b8',
+                        background: '#fff'
+                      }}></span>
+                      Lũy tiến (Bậc thang)
+                    </button>
+                  </div>
                 </div>
+
+                {!useTieredElectric ? (
+                  <div className="form-field">
+                    <label className="form-label">Phí điện (VNĐ/kWh)</label>
+                    <input type="text" className="form-input" value={formatInputCurrency(tableFeeForm.electricFee)}
+                      onChange={(e) => setTableFeeForm(p => ({ ...p, electricFee: parseInputCurrency(e.target.value) }))} placeholder="0" />
+                  </div>
+                ) : (
+                  <div className="form-field form-field--full">
+                      <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '8px', overflow: 'hidden' }}>
+                        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.8rem', textAlign: 'left' }}>
+                          <thead style={{ background: '#f1f5f9' }}>
+                            <tr>
+                              <th style={{ padding: '0.5rem 0.75rem', borderBottom: '1px solid #e2e8f0', fontWeight: 600, color: '#475569', width: '20%' }}>Bậc</th>
+                              <th style={{ padding: '0.5rem 0.75rem', borderBottom: '1px solid #e2e8f0', fontWeight: 600, color: '#475569' }}>Sản lượng (kWh)</th>
+                              <th style={{ padding: '0.5rem 0.75rem', borderBottom: '1px solid #e2e8f0', fontWeight: 600, color: '#475569', textAlign: 'right' }}>Đơn giá (VNĐ)</th>
+                              <th style={{ padding: '0.5rem 0.75rem', borderBottom: '1px solid #e2e8f0', fontWeight: 600, color: '#475569', textAlign: 'right', width: '80px' }}></th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {electricTiers.map((tier, idx) => {
+                              const displayLimit = tier.limitValue ? tier.limitValue : 'Trở lên';
+                              const isEditing = editingTierId === tier.id;
+                              return (
+                                <tr key={tier.id || idx} style={{ borderBottom: idx < electricTiers.length - 1 ? '1px solid #e2e8f0' : 'none' }}>
+                                  {isEditing ? (
+                                    <>
+                                      <td style={{ padding: '0.4rem 0.5rem' }}>
+                                        <input className="form-input" style={{ padding: '0.25rem', minHeight: 'unset' }} value={tierForm.tierOrder} onChange={e => setTierForm(p => ({ ...p, tierOrder: e.target.value }))} type="number" placeholder="Thứ tự" />
+                                      </td>
+                                      <td style={{ padding: '0.4rem 0.5rem' }}>
+                                        <input className="form-input" style={{ padding: '0.25rem', minHeight: 'unset' }} value={tierForm.limitValue} onChange={e => setTierForm(p => ({ ...p, limitValue: e.target.value }))} type="number" placeholder="VD: 50" />
+                                      </td>
+                                      <td style={{ padding: '0.4rem 0.5rem' }}>
+                                        <input className="form-input" style={{ padding: '0.25rem', minHeight: 'unset' }} value={tierForm.unitPrice} onChange={e => setTierForm(p => ({ ...p, unitPrice: e.target.value }))} type="number" placeholder="VD: 2000" />
+                                      </td>
+                                      <td style={{ padding: '0.4rem 0.5rem', textAlign: 'right', whiteSpace: 'nowrap' }}>
+                                        <button type="button" onClick={() => handleTierSave(tier.id)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#10b981', marginRight: '8px' }} title="Lưu">{Icons.check}</button>
+                                        <button type="button" onClick={handleTierCancel} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#64748b' }} title="Hủy">{Icons.close}</button>
+                                      </td>
+                                    </>
+                                  ) : (
+                                    <>
+                                      <td style={{ padding: '0.5rem 0.75rem', color: '#1e293b' }}>Bậc {tier.tierOrder || idx + 1}</td>
+                                      <td style={{ padding: '0.5rem 0.75rem', color: '#1e293b' }}>{displayLimit}</td>
+                                      <td style={{ padding: '0.5rem 0.75rem', color: '#1e293b', textAlign: 'right', fontWeight: 500 }}>{money(tier.unitPrice)}</td>
+                                      <td style={{ padding: '0.5rem 0.75rem', textAlign: 'right', whiteSpace: 'nowrap' }}>
+                                        <button type="button" title="Chỉnh sửa" onClick={() => handleTierEdit(tier)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#3b82f6', marginRight: '6px', padding: 0 }}>
+                                          <svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" strokeWidth="2" fill="none"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>
+                                        </button>
+                                        <button type="button" title="Xóa" onClick={() => handleTierDelete(tier.id)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#ef4444', padding: 0 }}>
+                                          <svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" strokeWidth="2" fill="none"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
+                                        </button>
+                                      </td>
+                                    </>
+                                  )}
+                                </tr>
+                              );
+                            })}
+                            
+                            {/* Row tạo mới */}
+                            {editingTierId === 'new' ? (
+                                <tr style={{ borderTop: '1px solid #cbd5e1', background: '#f8fafc' }}>
+                                  <td style={{ padding: '0.4rem 0.5rem' }}>
+                                    <input className="form-input" style={{ padding: '0.25rem', minHeight: 'unset' }} value={tierForm.tierOrder} onChange={e => setTierForm(p => ({ ...p, tierOrder: e.target.value }))} type="number" placeholder="Mức thứ" />
+                                  </td>
+                                  <td style={{ padding: '0.4rem 0.5rem' }}>
+                                    <input className="form-input" style={{ padding: '0.25rem', minHeight: 'unset' }} value={tierForm.limitValue} onChange={e => setTierForm(p => ({ ...p, limitValue: e.target.value }))} type="number" placeholder="Sản lượng" />
+                                  </td>
+                                  <td style={{ padding: '0.4rem 0.5rem' }}>
+                                    <input className="form-input" style={{ padding: '0.25rem', minHeight: 'unset' }} value={tierForm.unitPrice} onChange={e => setTierForm(p => ({ ...p, unitPrice: e.target.value }))} type="number" placeholder="VNĐ" />
+                                  </td>
+                                  <td style={{ padding: '0.4rem 0.5rem', textAlign: 'right', whiteSpace: 'nowrap' }}>
+                                    <button type="button" onClick={() => handleTierSave('new')} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#10b981', marginRight: '8px' }} title="Lưu">{Icons.check}</button>
+                                    <button type="button" onClick={handleTierCancel} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#64748b' }} title="Hủy">{Icons.close}</button>
+                                  </td>
+                                </tr>
+                            ) : (
+                                <tr style={{ borderTop: electricTiers.length > 0 ? '1px solid #e2e8f0' : 'none' }}>
+                                  <td colSpan={4} style={{ padding: '0.4rem 0.75rem', textAlign: 'center' }}>
+                                    <button
+                                      type="button"
+                                      onClick={() => { setEditingTierId('new'); setTierForm({ tierOrder: electricTiers.length + 1, limitValue: '', unitPrice: '' }); }}
+                                      style={{ background: 'none', border: 'none', color: '#3b82f6', fontWeight: 600, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.25rem', width: '100%', fontSize: '0.8rem', padding: '0.25rem' }}
+                                    >
+                                      + Khởi tạo bậc điện mới
+                                    </button>
+                                  </td>
+                                </tr>
+                            )}
+                          </tbody>
+                        </table>
+                      </div>
+                  </div>
+                )}
                 <div className="form-field">
                   <label className="form-label">Phí nước (VNĐ/m³)</label>
                   <input type="text" className="form-input" value={formatInputCurrency(tableFeeForm.waterFee)}
@@ -1365,6 +1743,11 @@ export default function InvoicesPage() {
                   <label className="form-label">Phí khác (VNĐ)</label>
                   <input type="text" className="form-input" value={formatInputCurrency(tableFeeForm.otherFee)}
                     onChange={(e) => setTableFeeForm(p => ({ ...p, otherFee: parseInputCurrency(e.target.value) }))} placeholder="0" />
+                </div>
+                <div className="form-field form-field--full">
+                  <label className="form-label">Mô tả (Phí khác)</label>
+                  <textarea className="form-input" value={tableFeeForm.descriptionOtherFee || ''}
+                    onChange={(e) => setTableFeeForm(p => ({ ...p, descriptionOtherFee: e.target.value }))} placeholder="Nhập mô tả cho khoản phí khác..." rows="3" style={{ resize: 'vertical' }} />
                 </div>
               </div>
               <div className="modal__footer">

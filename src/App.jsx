@@ -13,6 +13,7 @@ import FeedbacksPage from './pages/FeedbacksPage';
 import MaintenancesPage from './pages/MaintenancesPage';
 import InvoicesPage from './pages/InvoicesPage';
 import Layout from './components/layout/Layout';
+import PaymentResultPage from './pages/PaymentResultPage';
 
 function PrivateRoute({ children }) {
   const { isAuthenticated, loading } = useAuth();
@@ -85,6 +86,7 @@ function AppRoutes() {
         <Route path="feedbacks" element={<FeedbacksPage />} />
         <Route path="invoices" element={<InvoicesPage />} />
         <Route path="maintenances" element={<MaintenancesPage />} />
+        <Route path="payment-result" element={<PaymentResultPage />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
