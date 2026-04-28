@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { toast } from 'react-toastify';
 import residentService from '../services/residentService';
+import { exportToExcel } from '../utils/exportExcel';
 
 /* ─── constants ─── */
 const RELATIONSHIPS = [
@@ -224,7 +225,7 @@ export default function ResidentsPage() {
   const validateForm = () => {
     const errors = {};
     if (!formData.fullName.trim()) errors.fullName = 'Vui lòng nhập họ và tên';
-    if (modalMode === 'create' && formData.relationship === 'OWNER') {
+    if (modalMode === 'create' && (formData.relationship === 'OWNER' || formData.relationship === 'TENANT')) {
       if (!formData.userName.trim()) errors.userName = 'Vui lòng nhập tên đăng nhập';
       if (!formData.password.trim()) errors.password = 'Vui lòng nhập mật khẩu';
       if (formData.password.length > 0 && formData.password.length < 4) errors.password = 'Mật khẩu tối thiểu 4 ký tự';
@@ -250,7 +251,7 @@ export default function ResidentsPage() {
           email: formData.email || undefined,
           relationship: formData.relationship,
         };
-        if (formData.relationship === 'OWNER') {
+        if (formData.relationship === 'OWNER' || formData.relationship === 'TENANT') {
           payload.userName = formData.userName;
           payload.password = formData.password;
         }
@@ -319,10 +320,30 @@ export default function ResidentsPage() {
           <h2 className="page__title">Quản lý cư dân</h2>
           <p className="page__desc">Quản lý thông tin cư dân trong hệ thống ({totalElements} cư dân)</p>
         </div>
-        <button className="btn btn--primary" onClick={openCreateModal}>
-          <span className="btn__icon">{Icons.plus}</span>
-          Thêm cư dân
-        </button>
+        <div style={{ display: 'flex', gap: '0.5rem' }}>
+          <button className="btn btn--primary" onClick={openCreateModal}>
+            <span className="btn__icon">{Icons.plus}</span>
+            Thêm cư dân
+          </button>
+          <button className="btn" style={{background:'#059669',color:'#fff'}} onClick={async () => {
+            try {
+              const res = await residentService.getAll({ page: 0, size: 10000 });
+              const all = res.data?.data?.content || [];
+              exportToExcel(all, [
+                { header: 'ID', key: 'id', width: 8 },
+                { header: 'Tên đăng nhập', key: 'userName', width: 18 },
+                { header: 'Họ và tên', key: 'fullName', width: 22 },
+                { header: 'Số điện thoại', key: 'phoneNumber', width: 16 },
+                { header: 'Email', key: 'email', width: 24 },
+                { header: 'Mối quan hệ', key: 'relationship', width: 14, transform: r => relationshipLabel[r.relationship] || r.relationship || '' },
+              ], `cu-dan-${new Date().toISOString().slice(0,10)}`, 'Cư dân');
+              toast.success('Xuất Excel thành công!');
+            } catch { toast.error('Xuất Excel thất bại'); }
+          }}>
+            <span className="btn__icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg></span>
+            Xuất Excel
+          </button>
+        </div>
       </div>
 
       {/* Filters */}
@@ -523,8 +544,8 @@ export default function ResidentsPage() {
                   {formErrors.relationship && <span className="form-error">{formErrors.relationship}</span>}
                 </div>
 
-                {/* Username (create + OWNER only) */}
-                {modalMode === 'create' && formData.relationship === 'OWNER' && (
+                {/* Username (create + OWNER/TENANT only) */}
+                {modalMode === 'create' && (formData.relationship === 'OWNER' || formData.relationship === 'TENANT') && (
                   <div className="form-field">
                     <label className="form-label">
                       Tên đăng nhập <span className="form-required">*</span>
@@ -539,8 +560,8 @@ export default function ResidentsPage() {
                   </div>
                 )}
 
-                {/* Password (create + OWNER only) */}
-                {modalMode === 'create' && formData.relationship === 'OWNER' && (
+                {/* Password (create + OWNER/TENANT only) */}
+                {modalMode === 'create' && (formData.relationship === 'OWNER' || formData.relationship === 'TENANT') && (
                   <div className="form-field">
                     <label className="form-label">
                       Mật khẩu <span className="form-required">*</span>

@@ -7,6 +7,9 @@ const notificationService = {
   getById: (notificationId) => {
     return api.get(`/api/v1/notifications/${notificationId}`);
   },
+  getReceivers: (notificationId, params = {}) => {
+    return api.get(`/api/v1/notifications/${notificationId}/receivers`, { params });
+  },
   create: (data) => {
     return api.post('/api/v1/notifications', data);
   },

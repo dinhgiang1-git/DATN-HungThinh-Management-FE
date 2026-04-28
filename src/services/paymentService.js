@@ -1,12 +1,16 @@
 import api from './api';
 
 const paymentService = {
-  createVnpayPayment: (invoiceId) => {
-    return api.get(`/api/v1/payment/vnpay/${invoiceId}`);
+  createMomoPayment: (invoiceId) => {
+    return api.get(`/api/v1/payment/momo/${invoiceId}?source=admin`);
   },
-  vnpayCallback: (queryString) => {
-    return api.get(`/api/v1/payment/vnpay-callback${queryString}`);
+  momoCallback: (queryString) => {
+    return api.get(`/api/v1/payment/momo-callback${queryString}`);
+  },
+  createManualPayment: (data) => {
+    return api.post('/api/v1/payment/manual', data);
   },
 };
 
 export default paymentService;
+

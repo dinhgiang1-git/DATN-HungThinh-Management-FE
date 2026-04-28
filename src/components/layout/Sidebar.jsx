@@ -1,11 +1,14 @@
-import { useState } from 'react';
-import { NavLink, useLocation } from 'react-router-dom';
+import { useState, useEffect, useCallback } from 'react';
+import { NavLink, Link, useLocation } from 'react-router-dom';
+import { useAuth } from '../../contexts/AuthContext';
+import badgeService from '../../services/badgeService';
 import logo from '../../assets/Gemini-logo.png';
 
 const menuItems = [
   {
     label: 'TRANG CHỦ',
     path: '/',
+    roles: ['ADMIN', 'TECHNICIAN'],
     icon: (
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
         <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
@@ -15,6 +18,7 @@ const menuItems = [
   },
   {
     label: 'TÀI KHOẢN',
+    roles: ['ADMIN'],
     icon: (
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
         <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
@@ -28,6 +32,7 @@ const menuItems = [
   },
   {
     label: 'QUẢN LÝ',
+    roles: ['ADMIN', 'TECHNICIAN'],
     icon: (
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
         <rect x="2" y="3" width="20" height="14" rx="2" ry="2" />
@@ -36,12 +41,13 @@ const menuItems = [
       </svg>
     ),
     children: [
-      { label: 'Căn hộ', path: '/apartments' },
-      { label: 'Thiết bị', path: '/devices' },
+      { label: 'Căn hộ', path: '/apartments', roles: ['ADMIN'] },
+      { label: 'Thiết bị', path: '/devices', roles: ['ADMIN', 'TECHNICIAN'] },
     ],
   },
   {
     label: 'THÔNG BÁO & PHẢN ÁNH',
+    roles: ['ADMIN', 'TECHNICIAN'],
     icon: (
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
         <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9" />
@@ -49,12 +55,13 @@ const menuItems = [
       </svg>
     ),
     children: [
-      { label: 'Thông báo', path: '/notifications' },
-      { label: 'Phản hồi', path: '/feedbacks' },
+      { label: 'Thông báo', path: '/notifications', roles: ['ADMIN', 'TECHNICIAN'] },
+      { label: 'Phản hồi', path: '/feedbacks', roles: ['ADMIN'], badgeKey: 'pendingFeedbacks' },
     ],
   },
   {
     label: 'TÀI CHÍNH',
+    roles: ['ADMIN'],
     icon: (
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
         <line x1="12" y1="1" x2="12" y2="23" />
@@ -62,11 +69,13 @@ const menuItems = [
       </svg>
     ),
     children: [
-      { label: 'Hóa đơn', path: '/invoices' },
+      { label: 'Hóa đơn', path: '/invoices', badgeKey: 'unpaidInvoices' },
+      { label: 'Hợp đồng', path: '/contracts' },
     ],
   },
   {
     label: 'VẬN HÀNH',
+    roles: ['ADMIN', 'TECHNICIAN'],
     icon: (
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
         <circle cx="12" cy="12" r="3" />
@@ -74,27 +83,77 @@ const menuItems = [
       </svg>
     ),
     children: [
-      { label: 'Bảo trì', path: '/maintenances' },
+      { label: 'Bảo trì', path: '/maintenances', roles: ['ADMIN', 'TECHNICIAN'] },
+      { label: 'Phương tiện', path: '/vehicles', roles: ['ADMIN'] },
+      { label: 'Nhật ký', path: '/audit-logs', roles: ['ADMIN'] },
     ],
   },
 ];
 
 export default function Sidebar({ collapsed, onToggle }) {
   const location = useLocation();
+  const { user } = useAuth();
   const [openMenus, setOpenMenus] = useState({});
+  const userRole = user?.role || 'ADMIN';
 
-  const toggleMenu = (label) => {
-    setOpenMenus((prev) => ({ ...prev, [label]: !prev[label] }));
+  // Badge counts
+  const [badgeCounts, setBadgeCounts] = useState({});
+
+  const fetchBadgeCounts = useCallback(async () => {
+    if (userRole !== 'ADMIN') return;
+    try {
+      const res = await badgeService.getCounts();
+      setBadgeCounts(res.data?.data || {});
+    } catch {}
+  }, [userRole]);
+
+  useEffect(() => {
+    fetchBadgeCounts();
+    // Poll mỗi 30 giây
+    const interval = setInterval(fetchBadgeCounts, 30000);
+    return () => clearInterval(interval);
+  }, [fetchBadgeCounts]);
+
+  // Filter menu items by role
+  const filteredMenuItems = menuItems
+    .filter((item) => !item.roles || item.roles.includes(userRole))
+    .map((item) => {
+      if (item.children) {
+        const filteredChildren = item.children.filter(
+          (child) => !child.roles || child.roles.includes(userRole)
+        );
+        return filteredChildren.length > 0 ? { ...item, children: filteredChildren } : null;
+      }
+      return item;
+    })
+    .filter(Boolean);
+
+  const toggleMenu = (label, children) => {
+    setOpenMenus((prev) => {
+      const currentlyOpen = prev[label] !== undefined ? prev[label] : isChildActive(children);
+      return { ...prev, [label]: !currentlyOpen };
+    });
   };
 
   const isChildActive = (children) => {
     return children?.some((child) => location.pathname === child.path);
   };
 
+  // Tính tổng badge cho parent group
+  const getGroupBadge = (children) => {
+    if (!children) return 0;
+    return children.reduce((sum, child) => {
+      if (child.badgeKey && badgeCounts[child.badgeKey]) {
+        return sum + badgeCounts[child.badgeKey];
+      }
+      return sum;
+    }, 0);
+  };
+
   return (
     <aside className={`sidebar ${collapsed ? 'sidebar--collapsed' : ''}`}>
       {/* Logo section */}
-      <div className="sidebar__logo">
+      <Link to="/" className="sidebar__logo" style={{ textDecoration: 'none', color: 'inherit' }}>
         <img src={logo} alt="Hung Thinh" className="sidebar__logo-img" />
         {!collapsed && (
           <div className="sidebar__logo-text">
@@ -102,11 +161,11 @@ export default function Sidebar({ collapsed, onToggle }) {
             <span className="sidebar__logo-desc">Chung cư Hưng Thịnh</span>
           </div>
         )}
-      </div>
+      </Link>
 
       {/* Navigation */}
       <nav className="sidebar__nav">
-        {menuItems.map((item) => {
+        {filteredMenuItems.map((item) => {
           if (item.path) {
             // Direct link (TRANG CHỦ)
             return (
@@ -125,13 +184,14 @@ export default function Sidebar({ collapsed, onToggle }) {
           }
 
           // Dropdown menu
-          const isOpen = openMenus[item.label] || isChildActive(item.children);
+          const isOpen = openMenus[item.label] !== undefined ? openMenus[item.label] : isChildActive(item.children);
+          const groupBadge = getGroupBadge(item.children);
 
           return (
             <div key={item.label} className="sidebar__group">
               <button
                 className={`sidebar__item sidebar__item--parent ${isChildActive(item.children) ? 'sidebar__item--active' : ''}`}
-                onClick={() => toggleMenu(item.label)}
+                onClick={() => toggleMenu(item.label, item.children)}
               >
                 <span className="sidebar__item-icon">{item.icon}</span>
                 {!collapsed && (
@@ -151,18 +211,24 @@ export default function Sidebar({ collapsed, onToggle }) {
               </button>
               {!collapsed && isOpen && (
                 <div className="sidebar__submenu">
-                  {item.children.map((child) => (
-                    <NavLink
-                      key={child.path}
-                      to={child.path}
-                      className={({ isActive }) =>
-                        `sidebar__subitem ${isActive ? 'sidebar__subitem--active' : ''}`
-                      }
-                    >
-                      <span className="sidebar__subitem-dot" />
-                      {child.label}
-                    </NavLink>
-                  ))}
+                  {item.children.map((child) => {
+                    const count = child.badgeKey ? badgeCounts[child.badgeKey] || 0 : 0;
+                    return (
+                      <NavLink
+                        key={child.path}
+                        to={child.path}
+                        className={({ isActive }) =>
+                          `sidebar__subitem ${isActive ? 'sidebar__subitem--active' : ''}`
+                        }
+                      >
+                        <span className="sidebar__subitem-dot" />
+                        {child.label}
+                        {count > 0 && (
+                          <span className="sidebar__badge">{count > 99 ? '99+' : count}</span>
+                        )}
+                      </NavLink>
+                    );
+                  })}
                 </div>
               )}
             </div>

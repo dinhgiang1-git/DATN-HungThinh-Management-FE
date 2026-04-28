@@ -79,6 +79,11 @@ const Icons = {
       <polyline points="23 4 23 10 17 10" /><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10" />
     </svg>
   ),
+  download: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="7 10 12 15 17 10" /><line x1="12" y1="15" x2="12" y2="3" />
+    </svg>
+  ),
 };
 
 export default function ApartmentsPage() {
@@ -89,6 +94,17 @@ export default function ApartmentsPage() {
   const [totalPages, setTotalPages] = useState(0);
   const [totalElements, setTotalElements] = useState(0);
   const [filterStatus, setFilterStatus] = useState('');
+  const [filterBlock, setFilterBlock] = useState('');
+  const [filterFloor, setFilterFloor] = useState('');
+  const [blockDropOpen, setBlockDropOpen] = useState(false);
+  const [floorDropOpen, setFloorDropOpen] = useState(false);
+
+  // Close dropdowns on outside click
+  useEffect(() => {
+    const handleClick = () => { setBlockDropOpen(false); setFloorDropOpen(false); };
+    document.addEventListener('click', handleClick);
+    return () => document.removeEventListener('click', handleClick);
+  }, []);
   const [sortDirection, setSortDirection] = useState('asc');
   const [searchInput, setSearchInput] = useState('');
   const [searchKeyword, setSearchKeyword] = useState('');
@@ -142,6 +158,8 @@ export default function ApartmentsPage() {
         direction: sortDirection,
       };
       if (filterStatus) params.apartmentStatus = filterStatus;
+      if (filterBlock) params.block = filterBlock;
+      if (filterFloor) params.floor = Number(filterFloor);
       if (searchKeyword.trim()) params.keyword = searchKeyword.trim();
 
       const res = await apartmentService.getAll(params);
@@ -155,7 +173,24 @@ export default function ApartmentsPage() {
     } finally {
       setLoading(false);
     }
-  }, [page, filterStatus, sortDirection, searchKeyword]);
+  }, [page, filterStatus, filterBlock, filterFloor, sortDirection, searchKeyword]);
+
+  // Dynamic filter options (fetched from all apartments)
+  const [allBlocks, setAllBlocks] = useState([]);
+  const [allFloors, setAllFloors] = useState([]);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await apartmentService.getAll({ page: 0, size: 999 });
+        const all = res.data?.data?.content || [];
+        const blocks = [...new Set(all.map((a) => a.block).filter(Boolean))].sort();
+        const floors = [...new Set(all.map((a) => a.floor).filter((f) => f != null))].sort((a, b) => a - b);
+        setAllBlocks(blocks);
+        setAllFloors(floors);
+      } catch { /* ignore */ }
+    })();
+  }, []);
 
   useEffect(() => {
     fetchApartments();
@@ -229,6 +264,7 @@ export default function ApartmentsPage() {
       area: '',
       apartmentStatus: 'VACANT',
       ownerId: '',
+      tenantId: '',
       residentIds: [],
     });
     setFormErrors({});
@@ -242,10 +278,12 @@ export default function ApartmentsPage() {
   const openEditModal = (apt) => {
     setModalMode('edit');
     setSelectedApartment(apt);
-    // Filter out null/undefined IDs and also exclude the ownerId from the regular resident list
+    // Find TENANT resident
+    const tenantResident = (apt.residents || []).find((r) => r.relationshipType === 'TENANT');
+    // Filter out null/undefined IDs and also exclude the ownerId and tenantId from the regular resident list
     const currentResidentIds = (apt.residents || [])
       .map((r) => r.id)
-      .filter((id) => id != null && id !== apt.ownerId);
+      .filter((id) => id != null && id !== apt.ownerId && id !== (tenantResident?.id));
 
     setFormData({
       apartmentNumber: apt.apartmentNumber || '',
@@ -254,6 +292,7 @@ export default function ApartmentsPage() {
       area: apt.area ?? '',
       apartmentStatus: apt.apartmentStatus || 'VACANT',
       ownerId: apt.ownerId ?? '',
+      tenantId: tenantResident?.id ?? '',
       residentIds: currentResidentIds,
     });
     setFormErrors({});
@@ -306,10 +345,12 @@ export default function ApartmentsPage() {
 
     try {
       const finalOwnerId = formData.ownerId ? Number(formData.ownerId) : undefined;
-      // Ensure no null/empty IDs and the owner is not duplicated in residentIds
-      const validResidentIds = formData.residentIds.filter(
-        (id) => id != null && id !== finalOwnerId
-      );
+      const finalTenantId = formData.tenantId ? Number(formData.tenantId) : undefined;
+      // Ensure no null/empty IDs and the owner/tenant is not duplicated in residentIds
+      const validResidentIds = [
+        ...formData.residentIds.filter((id) => id != null && id !== finalOwnerId && id !== finalTenantId),
+        ...(finalTenantId ? [finalTenantId] : []),
+      ];
 
       const payload = {
         apartmentNumber: formData.apartmentNumber,
@@ -393,6 +434,58 @@ export default function ApartmentsPage() {
               </button>
             ))}
           </div>
+        </div>
+        <div className="filter-group" style={{ position: 'relative' }}>
+          <label className="filter-label">Tòa:</label>
+          <button
+            className={`filter-tab ${filterBlock ? 'filter-tab--active' : ''}`}
+            onClick={(e) => { e.stopPropagation(); setBlockDropOpen(!blockDropOpen); setFloorDropOpen(false); }}
+            style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}
+          >
+            {filterBlock || 'Tất cả'}
+            <svg style={{ width: 12, height: 12, transform: blockDropOpen ? 'rotate(180deg)' : '', transition: 'transform 0.2s' }} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="6 9 12 15 18 9" /></svg>
+          </button>
+          {blockDropOpen && (
+            <div className="filter-dropdown" onClick={(e) => e.stopPropagation()}>
+              <div
+                className={`filter-dropdown__item ${filterBlock === '' ? 'filter-dropdown__item--active' : ''}`}
+                onClick={() => { setFilterBlock(''); setPage(0); setBlockDropOpen(false); }}
+              >Tất cả</div>
+              {allBlocks.map((b) => (
+                <div
+                  key={b}
+                  className={`filter-dropdown__item ${filterBlock === b ? 'filter-dropdown__item--active' : ''}`}
+                  onClick={() => { setFilterBlock(b); setPage(0); setBlockDropOpen(false); }}
+                >Tòa {b}</div>
+              ))}
+            </div>
+          )}
+        </div>
+        <div className="filter-group" style={{ position: 'relative' }}>
+          <label className="filter-label">Tầng:</label>
+          <button
+            className={`filter-tab ${filterFloor ? 'filter-tab--active' : ''}`}
+            onClick={(e) => { e.stopPropagation(); setFloorDropOpen(!floorDropOpen); setBlockDropOpen(false); }}
+            style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}
+          >
+            {filterFloor ? `Tầng ${filterFloor}` : 'Tất cả'}
+            <svg style={{ width: 12, height: 12, transform: floorDropOpen ? 'rotate(180deg)' : '', transition: 'transform 0.2s' }} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="6 9 12 15 18 9" /></svg>
+          </button>
+          {floorDropOpen && (
+            <div className="filter-dropdown" onClick={(e) => e.stopPropagation()}>
+              <div
+                className={`filter-dropdown__item ${filterFloor === '' ? 'filter-dropdown__item--active' : ''}`}
+                onClick={() => { setFilterFloor(''); setPage(0); setFloorDropOpen(false); }}
+              >Tất cả</div>
+              {allFloors.map((f) => (
+                <div
+                  key={f}
+                  className={`filter-dropdown__item ${filterFloor === String(f) ? 'filter-dropdown__item--active' : ''}`}
+                  onClick={() => { setFilterFloor(String(f)); setPage(0); setFloorDropOpen(false); }}
+                >Tầng {f}</div>
+              ))}
+            </div>
+          )}
         </div>
         <div className="filter-actions">
           <div className="search-box">
@@ -631,7 +724,19 @@ export default function ApartmentsPage() {
                     className={`resident-select__tab ${residentFilterTab === 'resident' ? 'resident-select__tab--active' : ''}`}
                     onClick={() => { setResidentFilterTab('resident'); setResidentSearchKeyword(''); }}
                   >
-                    Cư dân {formData.residentIds.length > 0 ? `(${formData.residentIds.length})` : ''}
+                    Cư dân {(() => {
+                      const count = formData.residentIds.filter(id =>
+                        !availableResidents.find(r => r.id === id && r.relationship === 'TENANT')
+                      ).length;
+                      return count > 0 ? `(${count})` : '';
+                    })()}
+                  </button>
+                  <button
+                    type="button"
+                    className={`resident-select__tab ${residentFilterTab === 'tenant' ? 'resident-select__tab--active' : ''}`}
+                    onClick={() => { setResidentFilterTab('tenant'); setResidentSearchKeyword(''); }}
+                  >
+                    Người thuê {formData.tenantId ? '(1)' : ''}
                   </button>
                 </div>
                 <div className="resident-select">
@@ -641,7 +746,11 @@ export default function ApartmentsPage() {
                     <input
                       type="text"
                       className="resident-select__search-input"
-                      placeholder={residentFilterTab === 'owner' ? 'Tìm kiếm chủ hộ...' : 'Tìm kiếm cư dân...'}
+                      placeholder={
+                        residentFilterTab === 'owner' ? 'Tìm kiếm chủ hộ...'
+                          : residentFilterTab === 'tenant' ? 'Tìm kiếm người thuê...'
+                          : 'Tìm kiếm cư dân...'
+                      }
                       value={residentSearchKeyword}
                       onChange={(e) => setResidentSearchKeyword(e.target.value)}
                     />
@@ -657,10 +766,12 @@ export default function ApartmentsPage() {
                   </div>
                   {(() => {
                     const keyword = residentSearchKeyword.trim().toLowerCase();
-                    // Lọc theo tab: owner = OWNER, resident = không phải OWNER
+                    // Lọc theo tab: owner = OWNER, tenant = TENANT, resident = không phải OWNER và TENANT
                     const sourceList = residentFilterTab === 'owner'
                       ? availableOwners
-                      : availableResidents.filter((r) => r.relationship !== 'OWNER');
+                      : residentFilterTab === 'tenant'
+                        ? availableResidents.filter((r) => r.relationship === 'TENANT')
+                        : availableResidents.filter((r) => r.relationship !== 'OWNER' && r.relationship !== 'TENANT');
 
                     const filtered = keyword
                       ? sourceList.filter((r) => {
@@ -674,7 +785,9 @@ export default function ApartmentsPage() {
                     if (sourceList.length === 0) {
                       return (
                         <p className="resident-select__empty">
-                          {residentFilterTab === 'owner' ? 'Không có chủ hộ khả dụng' : 'Không có cư dân khả dụng'}
+                          {residentFilterTab === 'owner' ? 'Không có chủ hộ khả dụng'
+                            : residentFilterTab === 'tenant' ? 'Không có người thuê khả dụng'
+                            : 'Không có cư dân khả dụng'}
                         </p>
                       );
                     }
@@ -704,6 +817,38 @@ export default function ApartmentsPage() {
                                   <span className="resident-select__name">
                                     {r.fullName || r.userName}
                                     <span className="resident-select__owner-badge">Chủ hộ</span>
+                                  </span>
+                                  <span className="resident-select__sub">
+                                    {r.phoneNumber || r.email || ''}
+                                  </span>
+                                </div>
+                              </label>
+                            );
+                          })}
+                        </div>
+                      );
+                    } else if (residentFilterTab === 'tenant') {
+                      // Radio buttons cho người thuê (chọn 1)
+                      return (
+                        <div className="resident-select__grid">
+                          {filtered.map((r) => {
+                            const selected = Number(formData.tenantId) === r.id;
+                            return (
+                              <label
+                                key={r.id}
+                                className={`resident-select__item ${selected ? 'resident-select__item--active' : ''}`}
+                              >
+                                <input
+                                  type="radio"
+                                  name="tenantId"
+                                  checked={selected}
+                                  onChange={() => handleFormChange('tenantId', r.id)}
+                                  className="resident-select__checkbox"
+                                />
+                                <div className="resident-select__info">
+                                  <span className="resident-select__name">
+                                    {r.fullName || r.userName}
+                                    <span className="resident-select__owner-badge" style={{ color: '#2563eb', background: '#dbeafe' }}>Người thuê</span>
                                   </span>
                                   <span className="resident-select__sub">
                                     {r.phoneNumber || r.email || ''}
@@ -778,7 +923,8 @@ export default function ApartmentsPage() {
               </button>
             </div>
             <div className="modal__body">
-              <div className="detail-list">
+              {/* Basic info - 2 columns */}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0 24px' }}>
                 <div className="detail-item">
                   <span className="detail-label">ID</span>
                   <span className="detail-value">{selectedApartment.id}</span>
@@ -815,30 +961,55 @@ export default function ApartmentsPage() {
                 </div>
               </div>
 
-              {/* Chủ hộ in detail */}
+              {/* Chủ hộ & Người thuê in detail */}
               <div className="detail-section">
-                <h4 className="detail-section__title">Chủ hộ</h4>
+                <h4 className="detail-section__title">Chủ hộ & Người thuê</h4>
                 {(() => {
                   const owner = selectedApartment.ownerId && selectedApartment.residents
                     ? selectedApartment.residents.find((r) => r.residentId === selectedApartment.ownerId)
                     : null;
-                  return owner ? (
-                    <div className="detail-resident-card">
-                      <div className="detail-resident-card__avatar">
-                        {owner.fullName.charAt(0).toUpperCase()}
-                      </div>
-                      <div className="detail-resident-card__info">
-                        <span className="detail-resident-card__name">
-                          {owner.fullName}
-                          <span className="resident-select__owner-badge">Chủ hộ</span>
-                        </span>
-                        <span className="detail-resident-card__sub">
-                          {owner.phone || owner.phoneNumber || owner.email || '—'}
-                        </span>
-                      </div>
-                    </div>
-                  ) : (
-                    <p className="detail-section__empty">Chưa gán chủ hộ</p>
+                  const tenant = (selectedApartment.residents || []).find(
+                    (r) => r.relationshipType === 'TENANT' && r.residentId !== selectedApartment.ownerId
+                  );
+                  return (
+                    <>
+                      {owner ? (
+                        <div className="detail-resident-card">
+                          <div className="detail-resident-card__avatar">
+                            {owner.fullName.charAt(0).toUpperCase()}
+                          </div>
+                          <div className="detail-resident-card__info">
+                            <span className="detail-resident-card__name">
+                              {owner.fullName}
+                              <span className="resident-select__owner-badge">Chủ hộ</span>
+                            </span>
+                            <span className="detail-resident-card__sub">
+                              {owner.phone || owner.phoneNumber || owner.email || '—'}
+                            </span>
+                          </div>
+                        </div>
+                      ) : (
+                        <p className="detail-section__empty">Chưa gán chủ hộ</p>
+                      )}
+                      {tenant ? (
+                        <div className="detail-resident-card" style={{ marginTop: 8 }}>
+                          <div className="detail-resident-card__avatar" style={{ background: '#dbeafe', color: '#2563eb' }}>
+                            {tenant.fullName.charAt(0).toUpperCase()}
+                          </div>
+                          <div className="detail-resident-card__info">
+                            <span className="detail-resident-card__name">
+                              {tenant.fullName}
+                              <span className="resident-select__owner-badge" style={{ color: '#2563eb', background: '#dbeafe' }}>Người thuê</span>
+                            </span>
+                            <span className="detail-resident-card__sub">
+                              {tenant.phone || tenant.phoneNumber || tenant.email || '—'}
+                            </span>
+                          </div>
+                        </div>
+                      ) : (
+                        <p className="detail-section__empty" style={{ marginTop: 8 }}>Chưa có người thuê</p>
+                      )}
+                    </>
                   );
                 })()}
               </div>
@@ -847,7 +1018,7 @@ export default function ApartmentsPage() {
               <div className="detail-section">
                 {(() => {
                   const viewResidents = (selectedApartment.residents || []).filter(
-                    (r) => r.residentId !== selectedApartment.ownerId
+                    (r) => r.residentId !== selectedApartment.ownerId && r.relationshipType !== 'TENANT'
                   );
                   return (
                     <>
@@ -879,6 +1050,88 @@ export default function ApartmentsPage() {
                         </div>
                       ) : (
                         <p className="detail-section__empty">Chưa có cư dân nào</p>
+                      )}
+                    </>
+                  );
+                })()}
+              </div>
+
+              {/* Contracts list in detail */}
+              <div className="detail-section">
+                {(() => {
+                  const contracts = selectedApartment.contracts || [];
+                  const contractTypeLabel = { RENT: 'Thuê', PURCHASE: 'Mua bán', SERVICE: 'Dịch vụ' };
+                  const contractTypeColor = { RENT: { color: '#2563eb', bg: '#dbeafe' }, PURCHASE: { color: '#7c3aed', bg: '#ede9fe' }, SERVICE: { color: '#0891b2', bg: '#cffafe' } };
+                  const contractStatusLabel = { ACTIVE: 'Đang hiệu lực', EXPIRED: 'Hết hạn', TERMINATED: 'Đã chấm dứt' };
+                  const contractStatusColor = { ACTIVE: { color: '#059669', bg: '#d1fae5' }, EXPIRED: { color: '#d97706', bg: '#fef3c7' }, TERMINATED: { color: '#dc2626', bg: '#fee2e2' } };
+                  const fmtDate = (d) => {
+                    if (!d) return '—';
+                    if (Array.isArray(d)) { const [y, m, dd] = d; return `${String(dd).padStart(2,'0')}/${String(m).padStart(2,'0')}/${y}`; }
+                    return d;
+                  };
+                  const handleDownloadContract = async (contract) => {
+                    try {
+                      const contractService = (await import('../services/contractService')).default;
+                      const res = await contractService.download(contract.contractId);
+                      const url = window.URL.createObjectURL(new Blob([res.data]));
+                      const link = document.createElement('a');
+                      link.href = url;
+                      link.setAttribute('download', contract.originalFileName || 'contract.docx');
+                      document.body.appendChild(link);
+                      link.click();
+                      link.remove();
+                      window.URL.revokeObjectURL(url);
+                      toast.success('Tải file thành công!');
+                    } catch {
+                      toast.error('Không thể tải file hợp đồng');
+                    }
+                  };
+                  return (
+                    <>
+                      <h4 className="detail-section__title">
+                        Hợp đồng ({contracts.length})
+                      </h4>
+                      {contracts.length > 0 ? (
+                        <div className="detail-residents">
+                          {contracts.map((c) => {
+                            const tc = contractTypeColor[c.contractType] || { color: '#6b7280', bg: '#f3f4f6' };
+                            const sc = contractStatusColor[c.contractStatus] || { color: '#6b7280', bg: '#f3f4f6' };
+                            return (
+                              <div key={c.contractId} className="detail-resident-card" style={{ alignItems: 'flex-start' }}>
+                                <div className="detail-resident-card__avatar" style={{ background: tc.bg, color: tc.color, fontSize: '0.7rem', fontWeight: 700 }}>
+                                  HĐ
+                                </div>
+                                <div className="detail-resident-card__info" style={{ gap: '4px', flex: 1 }}>
+                                  <span className="detail-resident-card__name">
+                                    {c.contractNumber}
+                                    <span className="resident-select__owner-badge" style={{ color: tc.color, background: tc.bg }}>
+                                      {contractTypeLabel[c.contractType] || c.contractType}
+                                    </span>
+                                    <span className="resident-select__owner-badge" style={{ color: sc.color, background: sc.bg }}>
+                                      {contractStatusLabel[c.contractStatus] || c.contractStatus}
+                                    </span>
+                                  </span>
+                                  <span className="detail-resident-card__sub">
+                                    {fmtDate(c.startDate)} → {fmtDate(c.endDate)}
+                                    {c.residentName && ` • ${c.residentName}`}
+                                  </span>
+                                </div>
+                                {c.originalFileName && (
+                                  <button
+                                    className="action-btn action-btn--view"
+                                    title={`Tải: ${c.originalFileName}`}
+                                    onClick={() => handleDownloadContract(c)}
+                                    style={{ flexShrink: 0 }}
+                                  >
+                                    {Icons.download}
+                                  </button>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      ) : (
+                        <p className="detail-section__empty">Chưa có hợp đồng nào</p>
                       )}
                     </>
                   );

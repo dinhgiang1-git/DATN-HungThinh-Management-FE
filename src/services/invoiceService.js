@@ -16,6 +16,9 @@ const invoiceService = {
   delete: (invoiceId) => {
     return api.delete(`/api/v1/invoices/${invoiceId}`);
   },
+  batchCreate: (data) => {
+    return api.post('/api/v1/invoices/batch', data);
+  },
 };
 
 export default invoiceService;

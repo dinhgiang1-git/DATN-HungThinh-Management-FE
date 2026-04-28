@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { toast } from 'react-toastify';
 import feedbackService from '../services/feedbackService';
 
@@ -77,6 +77,71 @@ const Icons = {
     </svg>
   ),
 };
+
+/* ─── Custom Status Dropdown ─── */
+const STATUS_OPTIONS = [
+  { value: 'PENDING', label: 'Chờ xử lý' },
+  { value: 'IN_PROGRESS', label: 'Đang xử lý' },
+  { value: 'RESOLVED', label: 'Đã giải quyết' },
+  { value: 'CLOSED', label: 'Đã đóng' },
+];
+
+function StatusDropdown({ value, onChange }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef(null);
+
+  useEffect(() => {
+    const handler = (e) => {
+      if (ref.current && !ref.current.contains(e.target)) setOpen(false);
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, []);
+
+  const current = STATUS_OPTIONS.find((o) => o.value === value) || STATUS_OPTIONS[0];
+  const sc = statusColor[current.value] || { color: '#6b7280', bg: '#f3f4f6' };
+
+  return (
+    <div className="custom-select" ref={ref}>
+      <button
+        type="button"
+        className={`custom-select__trigger ${open ? 'custom-select__trigger--open' : ''}`}
+        onClick={() => setOpen(!open)}
+      >
+        <span className="custom-select__value">
+          <span className="custom-select__dot" style={{ background: sc.color }} />
+          {current.label}
+        </span>
+        <svg className={`custom-select__arrow ${open ? 'custom-select__arrow--open' : ''}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+          <polyline points="6 9 12 15 18 9" />
+        </svg>
+      </button>
+      {open && (
+        <div className="custom-select__menu">
+          {STATUS_OPTIONS.map((opt) => {
+            const optSc = statusColor[opt.value] || { color: '#6b7280', bg: '#f3f4f6' };
+            const isActive = opt.value === value;
+            return (
+              <div
+                key={opt.value}
+                className={`custom-select__option ${isActive ? 'custom-select__option--active' : ''}`}
+                onClick={() => { onChange(opt.value); setOpen(false); }}
+              >
+                <span className="custom-select__dot" style={{ background: optSc.color }} />
+                <span className="custom-select__option-label">{opt.label}</span>
+                {isActive && (
+                  <svg className="custom-select__check" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                    <polyline points="20 6 9 17 4 12" />
+                  </svg>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
 
 export default function FeedbacksPage() {
   /* ─── state ─── */
@@ -371,9 +436,6 @@ export default function FeedbacksPage() {
                         <button className="action-btn action-btn--edit" title="Phản hồi" onClick={() => openRespondModal(fb)}>
                           {Icons.reply}
                         </button>
-                        <button className="action-btn action-btn--edit" title="Sửa" onClick={() => openEditModal(fb)}>
-                          {Icons.edit}
-                        </button>
                         <button className="action-btn action-btn--delete" title="Xóa" onClick={() => openDeleteModal(fb)}>
                           {Icons.trash}
                         </button>
@@ -470,16 +532,10 @@ export default function FeedbacksPage() {
                 {/* Status */}
                 <div className="form-field">
                   <label className="form-label">Trạng thái</label>
-                  <select
-                    className="form-select"
+                  <StatusDropdown
                     value={formData.feedbackStatus}
-                    onChange={(e) => handleFormChange('feedbackStatus', e.target.value)}
-                  >
-                    <option value="PENDING">Chờ xử lý</option>
-                    <option value="IN_PROGRESS">Đang xử lý</option>
-                    <option value="RESOLVED">Đã giải quyết</option>
-                    <option value="CLOSED">Đã đóng</option>
-                  </select>
+                    onChange={(val) => handleFormChange('feedbackStatus', val)}
+                  />
                 </div>
 
                 {/* Response */}
@@ -511,7 +567,7 @@ export default function FeedbacksPage() {
       {/* Respond Modal */}
       {modalOpen && modalMode === 'respond' && selectedFeedback && (
         <div className="modal-overlay" onClick={() => setModalOpen(false)}>
-          <div className="modal" onClick={(e) => e.stopPropagation()}>
+          <div className="modal modal--respond" onClick={(e) => e.stopPropagation()}>
             <div className="modal__header">
               <h3 className="modal__title">Phản hồi yêu cầu</h3>
               <button className="modal__close" onClick={() => setModalOpen(false)}>
@@ -519,51 +575,74 @@ export default function FeedbacksPage() {
               </button>
             </div>
             <form onSubmit={handleSubmit} className="modal__body">
-              {/* Info hiển thị */}
-              <div className="detail-list" style={{ marginBottom: '1.5rem' }}>
-                <div className="detail-item">
-                  <span className="detail-label">Tiêu đề</span>
-                  <span className="detail-value detail-value--bold">{selectedFeedback.title}</span>
+              {/* ── Feedback card từ cư dân ── */}
+              <div className="fb-card">
+                <div className="fb-card__header">
+                  <div className="fb-card__icon">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                      <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+                    </svg>
+                  </div>
+                  <div className="fb-card__meta">
+                    <span className="fb-card__label">Yêu cầu từ cư dân</span>
+                    <span className="fb-card__apt">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ width: 12, height: 12 }}>
+                        <rect x="4" y="2" width="16" height="20" rx="2" />
+                        <path d="M9 22V12h6v10" />
+                      </svg>
+                      {getApartmentLabel(selectedFeedback.apartment)}
+                    </span>
+                  </div>
+                  <span
+                    className="badge"
+                    style={{
+                      color: (statusColor[selectedFeedback.feedbackStatus] || {}).color || '#6b7280',
+                      backgroundColor: (statusColor[selectedFeedback.feedbackStatus] || {}).bg || '#f3f4f6',
+                      marginLeft: 'auto',
+                    }}
+                  >
+                    {statusLabel[selectedFeedback.feedbackStatus] || selectedFeedback.feedbackStatus}
+                  </span>
                 </div>
-                <div className="detail-item">
-                  <span className="detail-label">Căn hộ</span>
-                  <span className="detail-value">{getApartmentLabel(selectedFeedback.apartment)}</span>
-                </div>
-                <div className="detail-item detail-item--full">
-                  <span className="detail-label">Nội dung</span>
-                  <span className="detail-value" style={{ whiteSpace: 'pre-wrap' }}>{selectedFeedback.content}</span>
+                <h4 className="fb-card__title">{selectedFeedback.title}</h4>
+                <div className="fb-card__content">
+                  <p>{selectedFeedback.content}</p>
                 </div>
               </div>
 
-              <div className="form-grid">
-                {/* Status */}
-                <div className="form-field">
-                  <label className="form-label">Cập nhật trạng thái</label>
-                  <select
-                    className="form-select"
-                    value={formData.feedbackStatus}
-                    onChange={(e) => handleFormChange('feedbackStatus', e.target.value)}
-                  >
-                    <option value="PENDING">Chờ xử lý</option>
-                    <option value="IN_PROGRESS">Đang xử lý</option>
-                    <option value="RESOLVED">Đã giải quyết</option>
-                    <option value="CLOSED">Đã đóng</option>
-                  </select>
+              {/* ── Phần phản hồi của admin ── */}
+              <div className="fb-respond">
+                <div className="fb-respond__header">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ width: 16, height: 16 }}>
+                    <polyline points="9 17 4 12 9 7" /><path d="M20 18v-2a4 4 0 0 0-4-4H4" />
+                  </svg>
+                  <span>Phản hồi từ ban quản lý</span>
                 </div>
 
-                {/* Response */}
-                <div className="form-field form-field--full">
-                  <label className="form-label">
-                    Phản hồi <span className="form-required">*</span>
-                  </label>
-                  <textarea
-                    className={`form-input form-textarea ${formErrors.response ? 'form-input--error' : ''}`}
-                    value={formData.response}
-                    onChange={(e) => handleFormChange('response', e.target.value)}
-                    placeholder="Nhập nội dung phản hồi cho cư dân..."
-                    rows={4}
-                  />
-                  {formErrors.response && <span className="form-error">{formErrors.response}</span>}
+                <div className="form-grid">
+                  {/* Status */}
+                  <div className="form-field">
+                    <label className="form-label">Cập nhật trạng thái</label>
+                    <StatusDropdown
+                      value={formData.feedbackStatus}
+                      onChange={(val) => handleFormChange('feedbackStatus', val)}
+                    />
+                  </div>
+
+                  {/* Response */}
+                  <div className="form-field form-field--full">
+                    <label className="form-label">
+                      Nội dung phản hồi <span className="form-required">*</span>
+                    </label>
+                    <textarea
+                      className={`form-input form-textarea ${formErrors.response ? 'form-input--error' : ''}`}
+                      value={formData.response}
+                      onChange={(e) => handleFormChange('response', e.target.value)}
+                      placeholder="Nhập nội dung phản hồi cho cư dân..."
+                      rows={4}
+                    />
+                    {formErrors.response && <span className="form-error">{formErrors.response}</span>}
+                  </div>
                 </div>
               </div>
 
@@ -591,45 +670,53 @@ export default function FeedbacksPage() {
               </button>
             </div>
             <div className="modal__body">
-              <div className="detail-list">
-                <div className="detail-item">
-                  <span className="detail-label">ID</span>
-                  <span className="detail-value">{selectedFeedback.feedbackId}</span>
+              {/* Meta row: apartment + status */}
+              <div className="fbv__meta">
+                <span className="fbv__apt">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ width: 14, height: 14 }}>
+                    <rect x="4" y="2" width="16" height="20" rx="2" />
+                    <path d="M9 22V12h6v10" />
+                  </svg>
+                  {getApartmentLabel(selectedFeedback.apartment)}
+                </span>
+                <span
+                  className="badge"
+                  style={{
+                    color: statusColor[selectedFeedback.feedbackStatus]?.color || '#6b7280',
+                    backgroundColor: statusColor[selectedFeedback.feedbackStatus]?.bg || '#f3f4f6',
+                  }}
+                >
+                  {statusLabel[selectedFeedback.feedbackStatus] || selectedFeedback.feedbackStatus}
+                </span>
+              </div>
+
+              {/* Title */}
+              <h4 className="fbv__title">{selectedFeedback.title}</h4>
+
+              {/* Content */}
+              <div className="fbv__section">
+                <div className="fbv__section-label">Nội dung phản hồi</div>
+                <div className="fbv__content">{selectedFeedback.content}</div>
+              </div>
+
+              {/* Admin response */}
+              <div className="fbv__section">
+                <div className="fbv__section-label fbv__section-label--response">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ width: 14, height: 14 }}>
+                    <polyline points="9 17 4 12 9 7" /><path d="M20 18v-2a4 4 0 0 0-4-4H4" />
+                  </svg>
+                  Phản hồi từ ban quản lý
                 </div>
-                <div className="detail-item">
-                  <span className="detail-label">Tiêu đề</span>
-                  <span className="detail-value detail-value--bold">{selectedFeedback.title}</span>
-                </div>
-                <div className="detail-item">
-                  <span className="detail-label">Căn hộ</span>
-                  <span className="detail-value">{getApartmentLabel(selectedFeedback.apartment)}</span>
-                </div>
-                <div className="detail-item">
-                  <span className="detail-label">Trạng thái</span>
-                  <span className="detail-value">
-                    <span
-                      className="badge"
-                      style={{
-                        color: statusColor[selectedFeedback.feedbackStatus]?.color || '#6b7280',
-                        backgroundColor: statusColor[selectedFeedback.feedbackStatus]?.bg || '#f3f4f6',
-                      }}
-                    >
-                      {statusLabel[selectedFeedback.feedbackStatus] || selectedFeedback.feedbackStatus}
-                    </span>
-                  </span>
-                </div>
-                <div className="detail-item detail-item--full">
-                  <span className="detail-label">Nội dung</span>
-                  <span className="detail-value" style={{ whiteSpace: 'pre-wrap' }}>{selectedFeedback.content}</span>
-                </div>
-                <div className="detail-item detail-item--full">
-                  <span className="detail-label">Phản hồi từ quản lý</span>
-                  <span className="detail-value" style={{ whiteSpace: 'pre-wrap' }}>
-                    {selectedFeedback.response || (
-                      <em style={{ color: 'var(--text-light, #94a3b8)' }}>Chưa có phản hồi</em>
-                    )}
-                  </span>
-                </div>
+                {selectedFeedback.response ? (
+                  <div className="fbv__response">{selectedFeedback.response}</div>
+                ) : (
+                  <div className="fbv__no-response">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" style={{ width: 18, height: 18 }}>
+                      <circle cx="12" cy="12" r="10" /><path d="M12 6v6l4 2" />
+                    </svg>
+                    Chưa có phản hồi
+                  </div>
+                )}
               </div>
             </div>
             <div className="modal__footer">

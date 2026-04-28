@@ -13,18 +13,21 @@ registerLocale('vi', vi);
 const STATUSES = [
   { value: '', label: 'Tất cả' },
   { value: 'SCHEDULED', label: 'Đã lên lịch' },
+  { value: 'IN_PROGRESS', label: 'Đang thực hiện' },
   { value: 'COMPLETED', label: 'Hoàn thành' },
   { value: 'CANCELLED', label: 'Đã hủy' },
 ];
 
 const statusLabel = {
   SCHEDULED: 'Đã lên lịch',
+  IN_PROGRESS: 'Đang thực hiện',
   COMPLETED: 'Hoàn thành',
   CANCELLED: 'Đã hủy',
 };
 
 const statusColor = {
   SCHEDULED: { color: '#2563eb', bg: '#dbeafe' },
+  IN_PROGRESS: { color: '#d97706', bg: '#fef3c7' },
   COMPLETED: { color: '#059669', bg: '#d1fae5' },
   CANCELLED: { color: '#dc2626', bg: '#fee2e2' },
 };
@@ -633,6 +636,7 @@ export default function MaintenancesPage() {
                     onChange={(e) => handleFormChange('maintenanceStatus', e.target.value)}
                   >
                     <option value="SCHEDULED">Đã lên lịch</option>
+                    <option value="IN_PROGRESS">Đang thực hiện</option>
                     <option value="COMPLETED">Hoàn thành</option>
                     <option value="CANCELLED">Đã hủy</option>
                   </select>

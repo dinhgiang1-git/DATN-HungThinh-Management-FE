@@ -6,7 +6,6 @@ import apartmentService from '../services/apartmentService';
 /* ─── constants ─── */
 const TARGET_TYPES = [
   { value: '', label: 'Tất cả' },
-  { value: 'ALL', label: 'Toàn bộ' },
   { value: 'BLOCK', label: 'Theo Block' },
   { value: 'APARTMENT', label: 'Theo căn hộ' },
 ];
@@ -123,6 +122,17 @@ export default function NotificationsPage() {
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [deleting, setDeleting] = useState(false);
 
+  // Paginated receivers for view modal
+  const RECEIVER_PAGE_SIZE = 5;
+  const [receivers, setReceivers] = useState([]);
+  const [receiverPage, setReceiverPage] = useState(0);
+  const [receiverTotalPages, setReceiverTotalPages] = useState(0);
+  const [receiverTotalElements, setReceiverTotalElements] = useState(0);
+  const [receiverLoading, setReceiverLoading] = useState(false);
+  const [receiverSearch, setReceiverSearch] = useState('');
+  const [receiverSearchKeyword, setReceiverSearchKeyword] = useState('');
+  const [receiverReadFilter, setReceiverReadFilter] = useState(null); // null=all, true=read, false=unread
+
   /* ─── fetch ─── */
   const fetchNotifications = useCallback(async () => {
     setLoading(true);
@@ -202,7 +212,61 @@ export default function NotificationsPage() {
     setModalOpen(true);
   };
 
-  const openViewModal = (notif) => { setModalMode('view'); setSelectedNotification(notif); setModalOpen(true); };
+  const openViewModal = (notif) => {
+    setModalMode('view');
+    setSelectedNotification(notif);
+    setReceiverPage(0);
+    setReceivers([]);
+    setReceiverSearch('');
+    setReceiverSearchKeyword('');
+    setReceiverReadFilter(null);
+    setModalOpen(true);
+    fetchReceivers(notif.notificationId, 0, '', null);
+  };
+
+  const fetchReceivers = async (notificationId, pg, keyword, isRead) => {
+    setReceiverLoading(true);
+    try {
+      const params = { page: pg, size: RECEIVER_PAGE_SIZE };
+      if (keyword) params.keyword = keyword;
+      if (isRead !== null && isRead !== undefined) params.isRead = isRead;
+      const res = await notificationService.getReceivers(notificationId, params);
+      const data = res.data?.data;
+      setReceivers(data?.content || []);
+      setReceiverTotalPages(data?.totalPages || 0);
+      setReceiverTotalElements(data?.totalElements || 0);
+    } catch (err) {
+      console.error('Lỗi tải danh sách người nhận:', err);
+    } finally {
+      setReceiverLoading(false);
+    }
+  };
+
+  const handleReceiverPageChange = (newPage) => {
+    if (!selectedNotification) return;
+    setReceiverPage(newPage);
+    fetchReceivers(selectedNotification.notificationId, newPage, receiverSearchKeyword, receiverReadFilter);
+  };
+
+  // Debounce receiver search
+  useEffect(() => {
+    if (!selectedNotification || modalMode !== 'view') return;
+    const timer = setTimeout(() => {
+      if (receiverSearchKeyword !== receiverSearch) {
+        setReceiverSearchKeyword(receiverSearch);
+        setReceiverPage(0);
+        fetchReceivers(selectedNotification.notificationId, 0, receiverSearch, receiverReadFilter);
+      }
+    }, 400);
+    return () => clearTimeout(timer);
+  }, [receiverSearch]);
+
+  const handleReceiverReadFilter = (value) => {
+    if (!selectedNotification) return;
+    setReceiverReadFilter(value);
+    setReceiverPage(0);
+    fetchReceivers(selectedNotification.notificationId, 0, receiverSearchKeyword, value);
+  };
   const openDeleteModal = (notif) => { setDeleteTarget(notif); setDeleteModalOpen(true); };
 
   const handleFormChange = (field, value) => {
@@ -293,7 +357,12 @@ export default function NotificationsPage() {
   const formatDateTime = (dateStr) => {
     if (!dateStr) return '—';
     try {
-      const date = new Date(dateStr);
+      let date;
+      if (Array.isArray(dateStr)) {
+        date = new Date(dateStr[0], (dateStr[1] || 1) - 1, dateStr[2] || 1, dateStr[3] || 0, dateStr[4] || 0, dateStr[5] || 0);
+      } else {
+        date = new Date(dateStr);
+      }
       if (isNaN(date.getTime())) return dateStr;
       const d = String(date.getDate()).padStart(2, '0');
       const m = String(date.getMonth() + 1).padStart(2, '0');
@@ -382,8 +451,6 @@ export default function NotificationsPage() {
             <tbody>
               {notifications.map((notif) => {
                 const tc = targetColor[notif.targetType] || { color: '#6b7280', bg: '#f3f4f6' };
-                const readCount = notif.receivers ? notif.receivers.filter(r => r.isRead).length : 0;
-                const totalReceivers = notif.receivers ? notif.receivers.length : 0;
                 return (
                   <tr key={notif.notificationId}>
                     <td className="data-table__cell--id">{notif.notificationId}</td>
@@ -404,7 +471,7 @@ export default function NotificationsPage() {
                     <td>{formatDateTime(notif.sendTime)}</td>
                     <td>
                       <span className="badge" style={{ color: '#2563eb', backgroundColor: '#dbeafe' }}>
-                        {readCount}/{totalReceivers} đã đọc
+                        {notif.readCount ?? 0}/{notif.totalReceivers ?? 0} đã đọc
                       </span>
                     </td>
                     <td>
@@ -634,7 +701,7 @@ export default function NotificationsPage() {
       {/* View Modal */}
       {modalOpen && modalMode === 'view' && selectedNotification && (
         <div className="modal-overlay" onClick={() => setModalOpen(false)}>
-          <div className="modal" onClick={(e) => e.stopPropagation()}>
+          <div className="modal modal--lg" onClick={(e) => e.stopPropagation()}>
             <div className="modal__header">
               <h3 className="modal__title">Chi tiết thông báo</h3>
               <button className="modal__close" onClick={() => setModalOpen(false)}>
@@ -642,51 +709,110 @@ export default function NotificationsPage() {
               </button>
             </div>
             <div className="modal__body">
-              <div className="detail-list">
-                <div className="detail-item">
-                  <span className="detail-label">ID</span>
-                  <span className="detail-value">{selectedNotification.notificationId}</span>
+              {/* Notification Card */}
+              <div className="notif-card">
+                <div className="notif-card__header">
+                  <div className="notif-card__icon">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                      <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9" />
+                      <path d="M13.73 21a2 2 0 0 1-3.46 0" />
+                    </svg>
+                  </div>
+                  <div className="notif-card__header-info">
+                    <h3 className="notif-card__header-title">{selectedNotification.title}</h3>
+                    <div className="notif-card__header-sub">
+                      <span>#{selectedNotification.notificationId}</span>
+                      <span>•</span>
+                      <span>{formatDateTime(selectedNotification.sendTime)}</span>
+                    </div>
+                  </div>
                 </div>
-                <div className="detail-item">
-                  <span className="detail-label">Tiêu đề</span>
-                  <span className="detail-value detail-value--bold" style={{ textAlign: 'left', flex: 1, paddingLeft: '2rem' }}>{selectedNotification.title}</span>
-                </div>
-                <div className="detail-item">
-                  <span className="detail-label">Đối tượng</span>
-                  <span className="detail-value">
-                    <span
-                      className="badge"
-                      style={{
-                        color: targetColor[selectedNotification.targetType]?.color || '#6b7280',
-                        backgroundColor: targetColor[selectedNotification.targetType]?.bg || '#f3f4f6',
-                      }}
-                    >
-                      {targetLabel[selectedNotification.targetType] || selectedNotification.targetType}
-                    </span>
-                  </span>
-                </div>
-                <div className="detail-item">
-                  <span className="detail-label">Người gửi</span>
-                  <span className="detail-value">{selectedNotification.sender?.fullName || '—'}</span>
-                </div>
-                <div className="detail-item">
-                  <span className="detail-label">Thời gian gửi</span>
-                  <span className="detail-value">{formatDateTime(selectedNotification.sendTime)}</span>
-                </div>
-                <div className="detail-item detail-item--full">
-                  <span className="detail-label">Nội dung</span>
-                  <span className="detail-value" style={{ whiteSpace: 'pre-wrap' }}>{selectedNotification.content}</span>
+                <div className="notif-card__body">
+                  <div className="notif-card__meta">
+                    <div className="notif-card__meta-item">
+                      <span className="notif-card__meta-label">Đối tượng</span>
+                      <span className="notif-card__meta-value">
+                        <span
+                          className="badge"
+                          style={{
+                            color: targetColor[selectedNotification.targetType]?.color || '#6b7280',
+                            backgroundColor: targetColor[selectedNotification.targetType]?.bg || '#f3f4f6',
+                          }}
+                        >
+                          {targetLabel[selectedNotification.targetType] || selectedNotification.targetType}
+                        </span>
+                      </span>
+                    </div>
+                    <div className="notif-card__meta-item">
+                      <span className="notif-card__meta-label">Người gửi</span>
+                      <span className="notif-card__meta-value">{selectedNotification.sender?.fullName || '—'}</span>
+                    </div>
+                    <div className="notif-card__meta-item">
+                      <span className="notif-card__meta-label">Tổng người nhận</span>
+                      <span className="notif-card__meta-value">{selectedNotification.totalReceivers ?? 0} người</span>
+                    </div>
+                    <div className="notif-card__meta-item">
+                      <span className="notif-card__meta-label">Đã đọc</span>
+                      <span className="notif-card__meta-value" style={{ color: '#059669', fontWeight: 600 }}>
+                        {selectedNotification.readCount ?? 0}/{selectedNotification.totalReceivers ?? 0}
+                      </span>
+                    </div>
+                  </div>
+                  {selectedNotification.content && (
+                    <div className="notif-card__content">{selectedNotification.content}</div>
+                  )}
                 </div>
               </div>
 
-              {/* Receivers list */}
-              {selectedNotification.receivers && selectedNotification.receivers.length > 0 && (
-                <div style={{ marginTop: '1.5rem' }}>
-                  <h4 style={{ fontSize: '0.95rem', fontWeight: 600, marginBottom: '0.75rem', color: 'var(--text-primary, #1e293b)' }}>
-                    Danh sách người nhận ({selectedNotification.receivers.length})
+              {/* Receivers Section */}
+              <div>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '10px' }}>
+                  <h4 style={{ fontSize: '0.88rem', fontWeight: 600, color: '#475569', margin: 0 }}>
+                    Danh sách người nhận ({receiverTotalElements})
                   </h4>
-                  <div style={{ maxHeight: '240px', overflowY: 'auto', border: '1px solid var(--border-color, #e2e8f0)', borderRadius: '0.5rem' }}>
-                    <table className="data-table" style={{ marginBottom: 0 }}>
+                </div>
+
+                {/* Search + Filter toolbar */}
+                <div className="rcv-toolbar">
+                  <div className="rcv-toolbar__search">
+                    <svg className="rcv-toolbar__search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                      <circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" />
+                    </svg>
+                    <input
+                      className="rcv-toolbar__search-input"
+                      placeholder="Tìm theo tên hoặc email..."
+                      value={receiverSearch}
+                      onChange={(e) => setReceiverSearch(e.target.value)}
+                    />
+                  </div>
+                  <div className="rcv-toolbar__filters">
+                    <button
+                      className={`rcv-filter-btn ${receiverReadFilter === null ? 'rcv-filter-btn--active' : ''}`}
+                      onClick={() => handleReceiverReadFilter(null)}
+                    >Tất cả</button>
+                    <button
+                      className={`rcv-filter-btn ${receiverReadFilter === true ? 'rcv-filter-btn--active' : ''}`}
+                      onClick={() => handleReceiverReadFilter(true)}
+                    >Đã đọc</button>
+                    <button
+                      className={`rcv-filter-btn ${receiverReadFilter === false ? 'rcv-filter-btn--active' : ''}`}
+                      onClick={() => handleReceiverReadFilter(false)}
+                    >Chưa đọc</button>
+                  </div>
+                </div>
+
+                <div style={{ border: '1px solid #e2e8f0', borderRadius: '0.5rem', overflow: 'hidden' }}>
+                  {receiverLoading ? (
+                    <div style={{ padding: '2rem', textAlign: 'center', color: '#94a3b8' }}>
+                      <div className="spinner" style={{ margin: '0 auto 0.5rem' }} />
+                      Đang tải...
+                    </div>
+                  ) : receivers.length === 0 ? (
+                    <div style={{ padding: '2rem', textAlign: 'center', color: '#94a3b8', fontSize: '13px' }}>
+                      {receiverSearch || receiverReadFilter !== null ? 'Không tìm thấy kết quả phù hợp' : 'Không có người nhận'}
+                    </div>
+                  ) : (
+                    <table className="rcv-table">
                       <thead>
                         <tr>
                           <th>Tên cư dân</th>
@@ -696,29 +822,57 @@ export default function NotificationsPage() {
                         </tr>
                       </thead>
                       <tbody>
-                        {selectedNotification.receivers.map((r) => (
+                        {receivers.map((r) => (
                           <tr key={r.receiverNotificationId}>
-                            <td className="data-table__cell--bold">{r.resident?.fullName || '—'}</td>
-                            <td>{r.resident?.email || '—'}</td>
+                            <td className="rcv-table__name">{r.resident?.fullName || '—'}</td>
+                            <td className="rcv-table__email">{r.resident?.email || '—'}</td>
                             <td>
                               <span
                                 className="badge"
                                 style={{
                                   color: r.isRead ? '#059669' : '#d97706',
                                   backgroundColor: r.isRead ? '#d1fae5' : '#fef3c7',
+                                  fontSize: '10.5px',
                                 }}
                               >
                                 {r.isRead ? 'Đã đọc' : 'Chưa đọc'}
                               </span>
                             </td>
-                            <td>{r.readAt ? formatDateTime(r.readAt) : '—'}</td>
+                            <td style={{ fontSize: '12px', color: '#64748b' }}>{r.readAt ? formatDateTime(r.readAt) : '—'}</td>
                           </tr>
                         ))}
                       </tbody>
                     </table>
-                  </div>
+                  )}
                 </div>
-              )}
+                {/* Receiver pagination */}
+                {receiverTotalPages > 1 && (
+                  <div style={{
+                    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                    padding: '0.75rem 0', fontSize: '0.82rem', color: '#64748b'
+                  }}>
+                    <span>Trang {receiverPage + 1} / {receiverTotalPages}</span>
+                    <div style={{ display: 'flex', gap: '0.5rem' }}>
+                      <button
+                        className="btn btn--ghost btn--sm"
+                        disabled={receiverPage === 0}
+                        onClick={() => handleReceiverPageChange(receiverPage - 1)}
+                        style={{ padding: '0.25rem 0.75rem', fontSize: '0.82rem' }}
+                      >
+                        ← Trước
+                      </button>
+                      <button
+                        className="btn btn--ghost btn--sm"
+                        disabled={receiverPage >= receiverTotalPages - 1}
+                        onClick={() => handleReceiverPageChange(receiverPage + 1)}
+                        style={{ padding: '0.25rem 0.75rem', fontSize: '0.82rem' }}
+                      >
+                        Sau →
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
             </div>
             <div className="modal__footer">
               <button className="btn btn--ghost" onClick={() => setModalOpen(false)}>

@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { toast } from 'react-toastify';
 import { useAuth } from '../contexts/AuthContext';
 import apartmentService from '../services/apartmentService';
 import residentService from '../services/residentService';
@@ -6,6 +7,11 @@ import deviceService from '../services/deviceService';
 import invoiceService from '../services/invoiceService';
 import feedbackService from '../services/feedbackService';
 import maintenanceService from '../services/maintenanceService';
+import { Chart as ChartJS, CategoryScale, LinearScale, BarElement, ArcElement, Title, Tooltip, Legend } from 'chart.js';
+import { Bar, Doughnut } from 'react-chartjs-2';
+import { exportToExcel } from '../utils/exportExcel';
+
+ChartJS.register(CategoryScale, LinearScale, BarElement, ArcElement, Title, Tooltip, Legend);
 
 /* ─── helpers ─── */
 const formatNumber = (n) => (n ?? 0).toLocaleString('vi-VN');
@@ -116,6 +122,12 @@ export default function DashboardPage() {
   const [recentFeedbacks, setRecentFeedbacks] = useState([]);
   const [recentInvoices, setRecentInvoices] = useState([]);
   const [recentMaintenances, setRecentMaintenances] = useState([]);
+  const [chartData, setChartData] = useState({
+    revenueByMonth: { labels: [], paid: [], unpaid: [] },
+    paymentRate: { paid: 0, unpaid: 0 },
+    apartmentStatus: { occupied: 0, vacant: 0, maintenance: 0 },
+    feedbackStatus: { pending: 0, inProgress: 0, resolved: 0, closed: 0 },
+  });
 
   useEffect(() => {
     fetchDashboardData();
@@ -132,11 +144,11 @@ export default function DashboardPage() {
         feedbacksRes,
         maintenancesRes,
       ] = await Promise.allSettled([
-        apartmentService.getAll({ page: 0, size: 1 }),
+        apartmentService.getAll({ page: 0, size: 9999 }),
         residentService.getAll({ page: 0, size: 1 }),
         deviceService.getAll({ page: 0, size: 1, deviceStatus: 'ACTIVE' }),
-        invoiceService.getAll({ page: 0, size: 5, direction: 'desc', sortBy: 'id' }),
-        feedbackService.getAll({ page: 0, size: 5, direction: 'desc', sortBy: 'id' }),
+        invoiceService.getAll({ page: 0, size: 9999, direction: 'desc', sortBy: 'id' }),
+        feedbackService.getAll({ page: 0, size: 9999, direction: 'desc', sortBy: 'id' }),
         maintenanceService.getAll({ page: 0, size: 5, direction: 'desc', sortBy: 'id' }),
       ]);
 
@@ -161,6 +173,50 @@ export default function DashboardPage() {
       setRecentFeedbacks(feedbacks?.content?.slice(0, 5) ?? []);
       setRecentInvoices(invoices?.content?.slice(0, 5) ?? []);
       setRecentMaintenances(maintenances?.content?.slice(0, 5) ?? []);
+
+      // ── Chart data processing ──
+      const allInvoices = invoices?.content ?? [];
+      const allApartments = apartments?.content ?? [];
+      const allFeedbacks = feedbacks?.content ?? [];
+
+      // 1. Revenue by month (6 months)
+      const now = new Date();
+      const monthLabels = [];
+      const paidByMonth = [];
+      const unpaidByMonth = [];
+      for (let i = 5; i >= 0; i--) {
+        const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+        const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+        monthLabels.push(`T${d.getMonth() + 1}/${d.getFullYear()}`);
+        const monthInvoices = allInvoices.filter(inv => {
+          const created = inv.createdAt ? inv.createdAt.substring(0, 7) : '';
+          return created === key;
+        });
+        paidByMonth.push(monthInvoices.filter(i => i.invoiceStatus === 'PAID').reduce((s, i) => s + (i.totalAmount || 0), 0));
+        unpaidByMonth.push(monthInvoices.filter(i => i.invoiceStatus === 'UNPAID').reduce((s, i) => s + (i.totalAmount || 0), 0));
+      }
+
+      // 2. Payment rate
+      const paidCount = allInvoices.filter(i => i.invoiceStatus === 'PAID').length;
+      const unpaidCount = allInvoices.filter(i => i.invoiceStatus === 'UNPAID').length;
+
+      // 3. Apartment status
+      const occupied = allApartments.filter(a => a.apartmentStatus === 'OCCUPIED').length;
+      const vacant = allApartments.filter(a => a.apartmentStatus === 'VACANT').length;
+      const underMaint = allApartments.filter(a => a.apartmentStatus === 'UNDER_MAINTENANCE').length;
+
+      // 4. Feedback distribution
+      const fbPending = allFeedbacks.filter(f => f.feedbackStatus === 'PENDING').length;
+      const fbInProgress = allFeedbacks.filter(f => f.feedbackStatus === 'IN_PROGRESS').length;
+      const fbResolved = allFeedbacks.filter(f => f.feedbackStatus === 'RESOLVED').length;
+      const fbClosed = allFeedbacks.filter(f => f.feedbackStatus === 'CLOSED').length;
+
+      setChartData({
+        revenueByMonth: { labels: monthLabels, paid: paidByMonth, unpaid: unpaidByMonth },
+        paymentRate: { paid: paidCount, unpaid: unpaidCount },
+        apartmentStatus: { occupied, vacant, maintenance: underMaint },
+        feedbackStatus: { pending: fbPending, inProgress: fbInProgress, resolved: fbResolved, closed: fbClosed },
+      });
     } catch (err) {
       console.error('Dashboard fetch error:', err);
     } finally {
@@ -199,6 +255,24 @@ export default function DashboardPage() {
           </p>
         </div>
         <div className="dashboard__welcome-date">
+          <button style={{background:'#059669',color:'#fff',border:'none',borderRadius:'0.5rem',padding:'0.5rem 1rem',cursor:'pointer',fontWeight:600,fontSize:'0.85rem',display:'flex',alignItems:'center',gap:'0.4rem',marginRight:'0.75rem'}} onClick={() => {
+            const rows = chartData.revenueByMonth.labels.map((label, i) => ({
+              month: label,
+              paid: chartData.revenueByMonth.paid[i],
+              unpaid: chartData.revenueByMonth.unpaid[i],
+              total: chartData.revenueByMonth.paid[i] + chartData.revenueByMonth.unpaid[i],
+            }));
+            exportToExcel(rows, [
+              { header: 'Tháng', key: 'month', width: 16 },
+              { header: 'Đã thu (VNĐ)', key: 'paid', width: 18 },
+              { header: 'Chưa thu (VNĐ)', key: 'unpaid', width: 18 },
+              { header: 'Tổng (VNĐ)', key: 'total', width: 18 },
+            ], `bao-cao-doanh-thu-${new Date().toISOString().slice(0,10)}`, 'Doanh thu');
+            toast.success('Xuất báo cáo thành công!');
+          }}>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" style={{width:16,height:16}}><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+            Xuất báo cáo
+          </button>
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
             <rect x="3" y="4" width="18" height="18" rx="2" ry="2" />
             <line x1="16" y1="2" x2="16" y2="6" />
@@ -229,6 +303,75 @@ export default function DashboardPage() {
             </div>
           </div>
         ))}
+      </div>
+
+      {/* ── Charts Section ── */}
+      <div className="dashboard__charts">
+        <div className="dashboard__chart-card dashboard__chart-card--wide">
+          <h3 className="dashboard__chart-title">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="3" width="7" height="18" rx="1" /><rect x="14" y="9" width="7" height="12" rx="1" /></svg>
+            Doanh thu theo tháng
+          </h3>
+          <div style={{ height: 280 }}>
+            <Bar
+              data={{
+                labels: chartData.revenueByMonth.labels,
+                datasets: [
+                  { label: 'Đã thu (VNĐ)', data: chartData.revenueByMonth.paid, backgroundColor: 'rgba(16, 185, 129, 0.7)', borderRadius: 6 },
+                  { label: 'Chưa thu (VNĐ)', data: chartData.revenueByMonth.unpaid, backgroundColor: 'rgba(239, 68, 68, 0.5)', borderRadius: 6 },
+                ],
+              }}
+              options={{ responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'top' } }, scales: { y: { beginAtZero: true, ticks: { callback: v => v >= 1e6 ? (v / 1e6).toFixed(1) + 'tr' : v >= 1e3 ? (v / 1e3).toFixed(0) + 'k' : v } } } }}
+            />
+          </div>
+        </div>
+        <div className="dashboard__chart-card">
+          <h3 className="dashboard__chart-title">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M22 12h-4l-3 9L9 3l-3 9H2" /></svg>
+            Tỷ lệ thanh toán
+          </h3>
+          <div style={{ height: 220, display: 'flex', justifyContent: 'center' }}>
+            <Doughnut
+              data={{
+                labels: ['Đã thanh toán', 'Chưa thanh toán'],
+                datasets: [{ data: [chartData.paymentRate.paid, chartData.paymentRate.unpaid], backgroundColor: ['#10b981', '#ef4444'], borderWidth: 0 }],
+              }}
+              options={{ responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'bottom' } } }}
+            />
+          </div>
+        </div>
+      </div>
+      <div className="dashboard__charts">
+        <div className="dashboard__chart-card">
+          <h3 className="dashboard__chart-title">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="4" y="2" width="16" height="20" rx="2" /><path d="M9 22V12h6v10" /></svg>
+            Tình trạng căn hộ
+          </h3>
+          <div style={{ height: 220, display: 'flex', justifyContent: 'center' }}>
+            <Doughnut
+              data={{
+                labels: ['Đang ở', 'Trống', 'Bảo trì'],
+                datasets: [{ data: [chartData.apartmentStatus.occupied, chartData.apartmentStatus.vacant, chartData.apartmentStatus.maintenance], backgroundColor: ['#10b981', '#3b82f6', '#f59e0b'], borderWidth: 0 }],
+              }}
+              options={{ responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'bottom' } } }}
+            />
+          </div>
+        </div>
+        <div className="dashboard__chart-card">
+          <h3 className="dashboard__chart-title">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" /></svg>
+            Phân bố phản hồi
+          </h3>
+          <div style={{ height: 220, display: 'flex', justifyContent: 'center' }}>
+            <Doughnut
+              data={{
+                labels: ['Chờ xử lý', 'Đang xử lý', 'Đã giải quyết', 'Đã đóng'],
+                datasets: [{ data: [chartData.feedbackStatus.pending, chartData.feedbackStatus.inProgress, chartData.feedbackStatus.resolved, chartData.feedbackStatus.closed], backgroundColor: ['#f59e0b', '#3b82f6', '#10b981', '#6b7280'], borderWidth: 0 }],
+              }}
+              options={{ responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'bottom' } } }}
+            />
+          </div>
+        </div>
       </div>
 
       {/* Tables section */}

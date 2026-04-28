@@ -44,8 +44,14 @@ export default function LoginPage() {
         toast.error(response.message || 'Đăng nhập thất bại');
       }
     } catch (error) {
-      const msg = error.response?.data?.message || 'Sai tên đăng nhập hoặc mật khẩu';
-      toast.error(msg);
+      const raw = error.response?.data?.message || '';
+      const msgMap = {
+        'Bad credentials': 'Sai tên đăng nhập hoặc mật khẩu',
+        'User is disabled': 'Tài khoản đã bị vô hiệu hóa',
+        'User account has expired': 'Tài khoản đã hết hạn',
+        'User account is locked': 'Tài khoản đã bị khóa',
+      };
+      toast.error(msgMap[raw] || raw || 'Sai tên đăng nhập hoặc mật khẩu');
     } finally {
       setIsLoading(false);
     }

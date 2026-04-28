@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
+import { exportToExcel } from '../utils/exportExcel';
 import { toast } from 'react-toastify';
 import DatePicker, { registerLocale } from 'react-datepicker';
 import { vi } from 'date-fns/locale';
@@ -9,6 +10,10 @@ import tableFeeService from '../services/tableFeeService';
 import tableElectricTierService from '../services/tableElectricTierService';
 import paymentService from '../services/paymentService';
 import evnService from '../services/evnService';
+import waterService from '../services/waterService';
+import jsPDF from 'jspdf';
+import autoTable from 'jspdf-autotable';
+import SearchableSelect from '../components/common/SearchableSelect';
 
 registerLocale('vi', vi);
 
@@ -17,12 +22,14 @@ const STATUSES = [
   { value: '', label: 'Tất cả' },
   { value: 'PAID', label: 'Đã thanh toán' },
   { value: 'UNPAID', label: 'Chưa thanh toán' },
+  { value: 'OVERDUE', label: 'Quá hạn' },
 ];
 
-const statusLabel = { PAID: 'Đã thanh toán', UNPAID: 'Chưa thanh toán' };
+const statusLabel = { PAID: 'Đã thanh toán', UNPAID: 'Chưa thanh toán', OVERDUE: 'Quá hạn' };
 const statusColor = {
   PAID: { color: '#059669', bg: '#d1fae5' },
   UNPAID: { color: '#dc2626', bg: '#fee2e2' },
+  OVERDUE: { color: '#c2410c', bg: '#ffedd5' },
 };
 
 const paymentStatusLabel = { PENDING: 'Đang xử lý', SUCCESS: 'Thành công', FAILED: 'Thất bại' };
@@ -46,7 +53,7 @@ const Icons = {
   search: (<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" /></svg>),
   refresh: (<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><polyline points="23 4 23 10 17 10" /><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10" /></svg>),
   fee: (<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><rect x="2" y="3" width="20" height="18" rx="2" /><line x1="2" y1="9" x2="22" y2="9" /><line x1="9" y1="3" x2="9" y2="21" /></svg>),
-  vnpay: (<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="1" y="4" width="22" height="16" rx="2" ry="2" /><line x1="1" y1="10" x2="23" y2="10" /></svg>),
+  momo: (<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 4H3a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h18a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2z" /><path d="M12 10v4" /><path d="M10 12h4" /><line x1="1" y1="10" x2="23" y2="10" /></svg>),
 };
 
 /* ─── helpers ─── */
@@ -164,6 +171,7 @@ export default function InvoicesPage() {
   });
   const [isCalculatingElectric, setIsCalculatingElectric] = useState(false);
   const [evnMockInfo, setEvnMockInfo] = useState({ loading: false, data: null, error: null });
+  const [waterMockInfo, setWaterMockInfo] = useState({ loading: false, data: null, error: null });
   const [formErrors, setFormErrors] = useState({});
   const [submitting, setSubmitting] = useState(false);
 
@@ -176,6 +184,15 @@ export default function InvoicesPage() {
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [deleting, setDeleting] = useState(false);
+
+  // Payment method modal
+  const [payModalOpen, setPayModalOpen] = useState(false);
+  const [payInvoiceId, setPayInvoiceId] = useState(null);
+  const [payMethod, setPayMethod] = useState(''); // MOMO, CASH, BANK_TRANSFER
+  const [payNote, setPayNote] = useState('');
+  const [payTxnNo, setPayTxnNo] = useState('');
+  const [payBank, setPayBank] = useState('');
+  const [paySubmitting, setPaySubmitting] = useState(false);
 
   // Table Fee Delete
   const [feeDeleteModalOpen, setFeeDeleteModalOpen] = useState(false);
@@ -201,6 +218,15 @@ export default function InvoicesPage() {
   const [tierSubmitting, setTierSubmitting] = useState(false);
   const [editingTierId, setEditingTierId] = useState(null); // 'new' or tier.id
   const [tierForm, setTierForm] = useState({ tierOrder: '', limitValue: '', unitPrice: '' });
+
+  // Batch Invoice
+  const [batchModalOpen, setBatchModalOpen] = useState(false);
+  const [batchDueDate, setBatchDueDate] = useState('');
+  const [batchSelectedApts, setBatchSelectedApts] = useState([]);
+  const [batchFeeIndex, setBatchFeeIndex] = useState(0);
+  const [batchSubmitting, setBatchSubmitting] = useState(false);
+  const [batchFilterBlock, setBatchFilterBlock] = useState('');
+  const [batchFilterFloor, setBatchFilterFloor] = useState('');
 
   /* ─── fetch ─── */
   const fetchInvoices = useCallback(async () => {
@@ -282,6 +308,37 @@ export default function InvoicesPage() {
       setEvnMockInfo({ loading: false, data: null, error: null });
     }
   }, [modalOpen, modalMode, formData.apartmentId, tableFees, selectedFeeIndex, apartments]);
+
+  // Fetch water mock data when apartment changes
+  useEffect(() => {
+    if (modalOpen && modalMode === 'create' && formData.apartmentId) {
+      const apt = apartments.find(a => String(a.id) === String(formData.apartmentId));
+      if (apt && apt.ownerId) {
+        setWaterMockInfo({ loading: true, data: null, error: null });
+        waterService.getBillByResidentId(apt.ownerId)
+          .then(res => {
+            if (res.data?.status) {
+              const d = res.data.data;
+              setWaterMockInfo({ loading: false, data: d, error: null });
+              setFormData(prev => {
+                const qty = d.cubicMeterConsumed;
+                const fee = (activeFee && activeFee.waterFee > 0 && qty > 0) ? String(qty * Number(activeFee.waterFee)) : '';
+                return { ...prev, waterQuantity: String(qty), waterFee: fee };
+              });
+            } else {
+              setWaterMockInfo({ loading: false, data: null, error: res.data?.message || 'Không lấy được dữ liệu nước' });
+            }
+          })
+          .catch(err => {
+            setWaterMockInfo({ loading: false, data: null, error: 'Chưa có hóa đơn nước' });
+          });
+      } else {
+        setWaterMockInfo({ loading: false, data: null, error: 'Căn hộ chưa có chủ sở hữu' });
+      }
+    } else {
+      setWaterMockInfo({ loading: false, data: null, error: null });
+    }
+  }, [modalOpen, modalMode, formData.apartmentId, apartments]);
 
   const handleTierEdit = (tier) => {
     setEditingTierId(tier.id);
@@ -471,20 +528,30 @@ export default function InvoicesPage() {
 
   const validateForm = () => {
     const errors = {};
-    if (!formData.invoiceNumber.trim()) errors.invoiceNumber = 'Vui lòng nhập số hóa đơn';
     if (!formData.dueDate) errors.dueDate = 'Vui lòng chọn hạn thanh toán';
     if (modalMode === 'create' && !formData.apartmentId) errors.apartmentId = 'Vui lòng chọn căn hộ';
-    if (activeFee?.useTieredElectric && formData.electricQuantity && !formData.electricFee) {
-      toast.error('Vui lòng Bấm "Tính phí" điện bậc thang trước khi lưu');
+    if (activeFee?.useTieredElectric && formData.electricQuantity && !formData.electricFee && isCalculatingElectric) {
+      toast.error('Đang tính phí điện bậc thang, vui lòng chờ...');
       return false;
     }
     setFormErrors(errors);
-    return Object.keys(errors).length === 0;
+    if (Object.keys(errors).length > 0) {
+      const firstErrorField = Object.keys(errors)[0];
+      setTimeout(() => {
+        const el = document.getElementById(`invoice-field-${firstErrorField}`);
+        if (el) {
+          el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          const input = el.querySelector('input, select');
+          if (input) input.focus();
+        }
+      }, 100);
+      return false;
+    }
+    return true;
   };
 
   const handleCalculateElectric = async () => {
     if (!formData.electricQuantity || !formData.electricStartDate || !formData.electricEndDate) {
-      toast.error("Vui lòng điền đầy đủ số lượng, ngày bắt đầu và kết thúc.");
       return;
     }
     setIsCalculatingElectric(true);
@@ -497,7 +564,6 @@ export default function InvoicesPage() {
       );
       if (res.data?.status !== false) {
         setFormData(p => ({ ...p, electricFee: String(res.data.data || 0) }));
-        toast.success("Tính phí điện thành công!");
       } else {
         toast.error(res.data?.message || "Không thể tính phí điện");
       }
@@ -507,6 +573,17 @@ export default function InvoicesPage() {
       setIsCalculatingElectric(false);
     }
   };
+
+  // Auto-calculate tiered electric fee when inputs change
+  useEffect(() => {
+    if (!modalOpen || !activeFee?.useTieredElectric) return;
+    if (!formData.electricQuantity || !formData.electricStartDate || !formData.electricEndDate) return;
+    
+    const timer = setTimeout(() => {
+      handleCalculateElectric();
+    }, 600);
+    return () => clearTimeout(timer);
+  }, [formData.electricQuantity, formData.electricStartDate, formData.electricEndDate, formData.numberOfHouseholds, modalOpen, activeFee?.useTieredElectric]);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -592,12 +669,118 @@ export default function InvoicesPage() {
     }
   };
 
-  /* ─── VNPay Payment ─── */
-  const handleVnpayPayment = async (invoiceId) => {
+  /* ─── Export Invoice PDF ─── */
+  const handleExportPDF = (inv) => {
+    // Strip Vietnamese diacritics (jsPDF helvetica doesn't support them)
+    const rd = (str) => {
+      if (!str) return '';
+      return str.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[đĐ]/g, (c) => c === 'đ' ? 'd' : 'D');
+    };
+
+    const doc = new jsPDF();
+    const fmt = (val) => val != null ? new Intl.NumberFormat('vi-VN').format(val) + ' VND' : '0 VND';
+    const apt = inv.apartment;
+    const aptLabel = apt ? 'Can ' + apt.apartmentNumber + (apt.block ? ' - Toa ' + apt.block : '') + (apt.floor ? ' - Tang ' + apt.floor : '') : 'N/A';
+
+    // Lookup owner name
+    let ownerName = 'N/A';
+    if (apt) {
+      const fullApt = apartments.find(a => a.id === apt.id);
+      if (fullApt) {
+        if (fullApt.residents && fullApt.residents.length > 0) {
+          const owner = fullApt.residents.find(r => r.id === fullApt.ownerId);
+          if (owner) ownerName = rd(owner.fullName);
+          else ownerName = rd(fullApt.residents[0]?.fullName) || 'N/A';
+        }
+      }
+    }
+
+    // Creator
+    const creatorName = rd(inv.creator?.fullName || inv.creator?.username || 'Admin');
+
+    // Created date - try multiple fields
+    let createdDate = 'N/A';
+    const rawDate = inv.createdAt || inv.createdDate || inv.created_at;
+    if (rawDate) {
+      try { createdDate = new Date(rawDate).toLocaleDateString('vi-VN'); } catch(e) { /* ignore */ }
+    }
+
+    const isPaid = inv.invoiceStatus === 'PAID';
+
+    // Header
+    doc.setFontSize(18);
+    doc.setFont('helvetica', 'bold');
+    doc.text('CHUNG CU HUNG THINH', 105, 20, { align: 'center' });
+    doc.setFontSize(10);
+    doc.setFont('helvetica', 'normal');
+    doc.text('He thong quan ly chung cu thong minh', 105, 27, { align: 'center' });
+
+    // Line
+    doc.setDrawColor(59, 130, 246);
+    doc.setLineWidth(0.8);
+    doc.line(20, 32, 190, 32);
+
+    // Title
+    doc.setFontSize(16);
+    doc.setFont('helvetica', 'bold');
+    doc.text('HOA DON DICH VU', 105, 42, { align: 'center' });
+
+    // Invoice info
+    doc.setFontSize(10);
+    doc.setFont('helvetica', 'normal');
+    const infoY = 52;
+    doc.text('So hoa don: ' + inv.invoiceNumber, 20, infoY);
+    doc.text('Ngay tao: ' + createdDate, 130, infoY);
+    doc.text('Can ho: ' + aptLabel, 20, infoY + 7);
+    doc.text('Han thanh toan: ' + (inv.dueDate ? new Date(inv.dueDate).toLocaleDateString('vi-VN') : 'N/A'), 130, infoY + 7);
+    doc.text('Chu ho: ' + ownerName, 20, infoY + 14);
+    doc.text('Nguoi tao: ' + creatorName, 130, infoY + 14);
+    // Status
+    doc.setFont('helvetica', 'bold');
+    doc.setTextColor(isPaid ? 16 : 239, isPaid ? 185 : 68, isPaid ? 129 : 68);
+    doc.text('Trang thai: ' + (isPaid ? 'DA THANH TOAN' : 'CHUA THANH TOAN'), 20, infoY + 23);
+    doc.setTextColor(0);
+    doc.setFont('helvetica', 'normal');
+
+    // Fee table
+    const fees = [];
+    if (inv.electricFee > 0) fees.push(['Tien dien', fmt(inv.electricFee)]);
+    if (inv.waterFee > 0) fees.push(['Tien nuoc', fmt(inv.waterFee)]);
+    if (inv.managementFee > 0) fees.push(['Phi quan ly', fmt(inv.managementFee)]);
+    if (inv.parkingFee > 0) fees.push(['Phi gui xe', fmt(inv.parkingFee)]);
+    if (inv.otherFee > 0) fees.push([rd('Phi khac' + (inv.descriptionOtherFee ? ' (' + inv.descriptionOtherFee + ')' : '')), fmt(inv.otherFee)]);
+    if (fees.length === 0) fees.push(['Khong co khoan phi nao', '0 VND']);
+
+    autoTable(doc, {
+      startY: infoY + 30,
+      head: [['Khoan muc', 'Thanh tien (VND)']],
+      body: fees,
+      foot: [['TONG CONG', fmt(inv.totalAmount)]],
+      theme: 'grid',
+      headStyles: { fillColor: [59, 130, 246], textColor: 255, fontStyle: 'bold', halign: 'center' },
+      footStyles: { fillColor: isPaid ? [16, 185, 129] : [239, 68, 68], textColor: 255, fontStyle: 'bold', fontSize: 12 },
+      columnStyles: { 0: { cellWidth: 110 }, 1: { halign: 'right', cellWidth: 60 } },
+      styles: { fontSize: 10 },
+    });
+
+    // Footer
+    const finalY = (doc.lastAutoTable?.finalY || doc.previousAutoTable?.finalY || 150) + 15;
+    doc.setFontSize(9);
+    doc.setTextColor(130);
+    doc.text('Day la hoa don duoc xuat tu he thong Quan ly Chung cu Hung Thinh.', 105, finalY, { align: 'center' });
+
+    doc.save('HoaDon_' + inv.invoiceNumber + '.pdf');
+    toast.success('Xuat PDF thanh cong!');
+  };
+  const openPaymentModal = (invoiceId) => {
+    setPayInvoiceId(invoiceId); setPayMethod(''); setPayNote(''); setPayTxnNo(''); setPayBank('');
+    setPayModalOpen(true);
+  };
+
+  const handleMomoPayment = async (invoiceId) => {
     try {
-      toast.info('Đang tạo liên kết thanh toán VNPay...');
-      const res = await paymentService.createVnpayPayment(invoiceId);
-      // Backend mới trả về ApiResponse nên URL nằm trong res.data.data
+      toast.info('Đang tạo liên kết thanh toán MoMo...');
+      const res = await paymentService.createMomoPayment(invoiceId);
       const paymentUrl = res.data?.data;
       if (paymentUrl && typeof paymentUrl === 'string' && paymentUrl.startsWith('http')) {
         window.open(paymentUrl, '_blank');
@@ -605,7 +788,33 @@ export default function InvoicesPage() {
         toast.error('Không thể tạo liên kết thanh toán');
       }
     } catch (err) {
-      toast.error(err.response?.data?.message || 'Lỗi khi tạo thanh toán VNPay');
+      toast.error(err.response?.data?.message || 'Lỗi khi tạo thanh toán MoMo');
+    }
+  };
+
+  const handleManualPayment = async () => {
+    if (!payMethod) { toast.warning('Vui lòng chọn phương thức thanh toán'); return; }
+    if (payMethod === 'MOMO') {
+      setPayModalOpen(false);
+      handleMomoPayment(payInvoiceId);
+      return;
+    }
+    setPaySubmitting(true);
+    try {
+      await paymentService.createManualPayment({
+        invoiceId: payInvoiceId,
+        paymentMethod: payMethod,
+        note: payNote || undefined,
+        transactionNo: payTxnNo || undefined,
+        bankCode: payBank || undefined,
+      });
+      toast.success('Ghi nhận thanh toán thành công!');
+      setPayModalOpen(false);
+      fetchInvoices();
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Có lỗi xảy ra');
+    } finally {
+      setPaySubmitting(false);
     }
   };
 
@@ -894,10 +1103,37 @@ export default function InvoicesPage() {
           <h2 className="page__title">Quản lý hóa đơn</h2>
           <p className="page__desc">Quản lý hóa đơn thu phí căn hộ ({totalElements} hóa đơn)</p>
         </div>
-        <button className="btn btn--primary" onClick={openCreateModal}>
-          <span className="btn__icon">{Icons.plus}</span>
-          Tạo hóa đơn
-        </button>
+        <div style={{ display: 'flex', gap: '0.5rem' }}>
+          <button className="btn btn--primary" onClick={openCreateModal}>
+            <span className="btn__icon">{Icons.plus}</span>
+            Tạo hóa đơn
+          </button>
+          <button className="btn" style={{background:'linear-gradient(135deg,#6366f1,#4f46e5)',color:'#fff'}} onClick={() => { const d = new Date(); d.setMonth(d.getMonth() + 1); d.setDate(d.getDate() + 1); const dd = `${String(d.getDate()).padStart(2,'0')}/${String(d.getMonth()+1).padStart(2,'0')}/${d.getFullYear()}`; setBatchModalOpen(true); setBatchSelectedApts([]); setBatchDueDate(dd); setBatchFeeIndex(0); setBatchFilterBlock(''); setBatchFilterFloor(''); }}>
+            <span className="btn__icon">{Icons.plus}</span>
+            Tạo hàng loạt
+          </button>
+          <button className="btn" style={{background:'#059669',color:'#fff'}} onClick={() => {
+            const statusLabel = { PAID:'Đã thanh toán', UNPAID:'Chưa thanh toán', OVERDUE:'Quá hạn', CANCELLED:'Đã hủy' };
+            exportToExcel(invoices, [
+              { header: 'Mã hóa đơn', key: 'invoiceNumber', width: 18 },
+              { header: 'Căn hộ', key: 'apartment', width: 20, transform: inv => inv.apartment ? `${inv.apartment.apartmentNumber} - Block ${inv.apartment.block} - Tầng ${inv.apartment.floor}` : '' },
+              { header: 'Tiền điện', key: 'electricFee', width: 14 },
+              { header: 'Tiền nước', key: 'waterFee', width: 14 },
+              { header: 'Phí quản lý', key: 'managementFee', width: 14 },
+              { header: 'Phí gửi xe', key: 'parkingFee', width: 14 },
+              { header: 'Phí khác', key: 'otherFee', width: 14 },
+              { header: 'Tổng tiền', key: 'totalAmount', width: 16 },
+              { header: 'Hạn thanh toán', key: 'dueDate', width: 16, transform: inv => inv.dueDate ? new Date(inv.dueDate).toLocaleDateString('vi-VN') : '' },
+              { header: 'Trạng thái', key: 'invoiceStatus', width: 16, transform: inv => statusLabel[inv.invoiceStatus] || inv.invoiceStatus },
+              { header: 'Người tạo', key: 'creator', width: 18, transform: inv => inv.creator?.fullName || '' },
+              { header: 'Ngày tạo', key: 'createdAt', width: 20, transform: inv => inv.createdAt ? new Date(inv.createdAt).toLocaleString('vi-VN') : '' },
+            ], `hoa-don-${new Date().toISOString().slice(0,10)}`, 'Hóa đơn');
+            toast.success('Xuất Excel thành công!');
+          }}>
+            <span className="btn__icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg></span>
+            Xuất Excel
+          </button>
+        </div>
       </div>
 
       {/* Filters */}
@@ -973,18 +1209,30 @@ export default function InvoicesPage() {
                     <td>
                       <div className="action-btns">
                         <button className="action-btn action-btn--view" title="Xem" onClick={() => openViewModal(inv)}>{Icons.eye}</button>
-                        <button className="action-btn action-btn--edit" title="Sửa" onClick={() => openEditModal(inv)}>{Icons.edit}</button>
-                        <button className="action-btn action-btn--delete" title="Xóa" onClick={() => openDeleteModal(inv)}>{Icons.trash}</button>
-                        {inv.invoiceStatus === 'UNPAID' && (
+                        {(inv.invoiceStatus === 'UNPAID' || inv.invoiceStatus === 'OVERDUE') ? (
                           <button
                             className="action-btn"
-                            title="Thanh toán VNPay"
-                            onClick={() => handleVnpayPayment(inv.invoiceId)}
-                            style={{ color: '#0066cc', background: '#e0f0ff' }}
+                            title="Thanh toán"
+                            onClick={() => openPaymentModal(inv.invoiceId)}
+                            style={{ color: '#16a34a', background: '#dcfce7' }}
                           >
-                            {Icons.vnpay}
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ width: 16, height: 16 }}><rect x="1" y="4" width="22" height="16" rx="2" ry="2" /><line x1="1" y1="10" x2="23" y2="10" /></svg>
+                          </button>
+                        ) : (
+                          <button
+                            className="action-btn"
+                            title="Đã thanh toán"
+                            disabled
+                            style={{ color: '#a3e635', background: '#f0fdf4', opacity: 0.5, cursor: 'default' }}
+                          >
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" style={{ width: 16, height: 16 }}><polyline points="20 6 9 17 4 12" /></svg>
                           </button>
                         )}
+                        <button className="action-btn" title="Xuất PDF" onClick={() => handleExportPDF(inv)} style={{ color: '#dc2626', background: '#fee2e2' }}>
+                          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ width: 16, height: 16 }}><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><polyline points="14 2 14 8 20 8" /><line x1="16" y1="13" x2="8" y2="13" /><line x1="16" y1="17" x2="8" y2="17" /></svg>
+                        </button>
+                        <button className="action-btn action-btn--edit" title="Sửa" onClick={() => openEditModal(inv)}>{Icons.edit}</button>
+                        <button className="action-btn action-btn--delete" title="Xóa" onClick={() => openDeleteModal(inv)}>{Icons.trash}</button>
                       </div>
                     </td>
                   </tr>
@@ -1107,75 +1355,48 @@ export default function InvoicesPage() {
             <form onSubmit={handleSubmit} className="modal__body">
               <div className="form-grid">
                 {/* 1. Apartment selection (create only) */}
-                {modalMode === 'create' && (() => {
-                  const blocks = [...new Set(apartments.map(a => a.block).filter(Boolean))].sort();
-                  const floors = [...new Set(apartments.map(a => a.floor).filter(v => v != null))].sort((a, b) => a - b);
-                  const filteredApts = apartments.filter(a => {
-                    if (aptFilterBlock && a.block !== aptFilterBlock) return false;
-                    if (aptFilterFloor && a.floor !== Number(aptFilterFloor)) return false;
-                    return true;
-                  });
-                  return (
-                    <div className="form-field form-field--full" style={{ padding: 0, background: '#ffffff', borderRadius: '8px', border: '1px solid #cbd5e1', marginBottom: 0, overflow: 'hidden', boxShadow: '0 2px 4px rgba(0,0,0,0.02)' }}>
-                      <div style={{ background: '#f1f5f9', padding: '0.85rem 1.25rem', borderBottom: '1px solid #cbd5e1', fontWeight: 600, color: '#0f172a', fontSize: '1.05rem', display: 'flex', alignItems: 'center' }}>
-                        1. Đối tượng áp dụng <span className="form-required" style={{ marginLeft: 4 }}>*</span>
-                      </div>
-                      <div style={{ padding: '1.25rem' }}>
-                        <div style={{ display: 'flex', gap: '0.75rem', marginBottom: '0.75rem' }}>
-                          <select className="form-select" value={aptFilterBlock} onChange={(e) => setAptFilterBlock(e.target.value)} style={{ flex: 1 }}>
-                            <option value="">Tất cả tòa nhà</option>
-                            {blocks.map(b => <option key={b} value={b}>Tòa {b}</option>)}
-                          </select>
-                          <select className="form-select" value={aptFilterFloor} onChange={(e) => setAptFilterFloor(e.target.value)} style={{ flex: 1 }}>
-                            <option value="">Tất cả tầng</option>
-                            {floors.map(f => <option key={f} value={f}>Tầng {f}</option>)}
-                          </select>
-                        </div>
-                        <div className="resident-select">
-                          {filteredApts.length === 0 ? (
-                            <p className="resident-select__empty">Không tìm thấy căn hộ nào</p>
-                          ) : (
-                            <div className="resident-select__grid" style={{ maxHeight: '180px' }}>
-                              {filteredApts.map((apt) => {
-                                const selected = String(formData.apartmentId) === String(apt.id);
-                                return (
-                                  <label key={apt.id} className={`resident-select__item ${selected ? 'resident-select__item--active' : ''}`}>
-                                    <input type="radio" name="apartmentSelect" checked={selected}
-                                      onChange={() => handleFormChange('apartmentId', apt.id)} className="resident-select__checkbox" />
-                                    <div className="resident-select__info">
-                                      <span className="resident-select__name">Căn {apt.apartmentNumber}</span>
-                                      <span className="resident-select__sub">{apt.block ? `Tòa ${apt.block} · ` : ''}Tầng {apt.floor}{apt.area ? ` · ${apt.area}m²` : ''}</span>
-                                    </div>
-                                  </label>
-                                );
-                              })}
-                            </div>
-                          )}
-                        </div>
-                        {formErrors.apartmentId && <span className="form-error">{formErrors.apartmentId}</span>}
-                      </div>
+                {modalMode === 'create' && (
+                  <div className="form-field form-field--full" style={{ padding: 0, background: '#ffffff', borderRadius: '8px', border: '1px solid #cbd5e1', marginBottom: 0, boxShadow: '0 2px 4px rgba(0,0,0,0.02)' }}>
+                    <div style={{ background: 'linear-gradient(135deg, #eef2ff, #e0e7ff)', padding: '0.85rem 1.25rem', borderBottom: '1px solid #cbd5e1', fontWeight: 600, color: '#3730a3', fontSize: '0.95rem', display: 'flex', alignItems: 'center', gap: '0.5rem', borderRadius: '8px 8px 0 0' }}>
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ width: 18, height: 18 }}><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" /><polyline points="9 22 9 12 15 12 15 22" /></svg>
+                      Chọn căn hộ <span className="form-required">*</span>
                     </div>
-                  );
-                })()}
+                    <div style={{ padding: '1.25rem' }} id="invoice-field-apartmentId">
+                      <SearchableSelect
+                        options={apartments.map(apt => ({
+                          value: apt.id,
+                          label: `Căn ${apt.apartmentNumber}`,
+                          sub: `${apt.block ? `Tòa ${apt.block} · ` : ''}Tầng ${apt.floor}${apt.area ? ` · ${apt.area}m²` : ''}`,
+                        }))}
+                        value={formData.apartmentId}
+                        onChange={(val) => handleFormChange('apartmentId', val)}
+                        placeholder="Tìm kiếm căn hộ..."
+                        error={formErrors.apartmentId}
+                      />
+                      {formErrors.apartmentId && <span className="form-error" style={{ marginTop: 4 }}>{formErrors.apartmentId}</span>}
+                    </div>
+                  </div>
+                )}
 
                 {/* 2. Invoice Info */}
                 <div className="form-field form-field--full" style={{ padding: 0, background: '#ffffff', borderRadius: '8px', border: '1px solid #cbd5e1', marginBottom: 0, overflow: 'hidden', boxShadow: '0 2px 4px rgba(0,0,0,0.02)' }}>
-                  <div style={{ background: '#f1f5f9', padding: '0.85rem 1.25rem', borderBottom: '1px solid #cbd5e1', fontWeight: 600, color: '#0f172a', fontSize: '1.05rem' }}>
-                    {modalMode === 'create' ? '2' : '1'}. Thông tin chứng từ
+                  <div style={{ background: 'linear-gradient(135deg, #ecfdf5, #d1fae5)', padding: '0.85rem 1.25rem', borderBottom: '1px solid #a7f3d0', fontWeight: 600, color: '#065f46', fontSize: '0.95rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ width: 18, height: 18 }}><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><polyline points="14 2 14 8 20 8" /><line x1="16" y1="13" x2="8" y2="13" /><line x1="16" y1="17" x2="8" y2="17" /></svg>
+                    Thông tin chứng từ
                   </div>
-                  <div style={{ padding: '1.25rem', display: 'grid', gridTemplateColumns: 'minmax(0,1fr) minmax(0,1fr) minmax(0,1fr)', gap: '1rem' }}>
-                    <div className="form-field" style={{ marginBottom: 0 }}>
-                      <label className="form-label">Số hóa đơn <span className="form-required">*</span></label>
+                  <div style={{ padding: '1.25rem', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+                    <div className="form-field" style={{ marginBottom: 0 }} id="invoice-field-invoiceNumber">
+                      <label className="form-label">Số hóa đơn</label>
                       <input
-                        className={`form-input ${formErrors.invoiceNumber ? 'form-input--error' : ''}`}
+                        className="form-input"
                         value={formData.invoiceNumber}
                         onChange={(e) => handleFormChange('invoiceNumber', e.target.value)}
-                        placeholder="VD: HD-001"
+                        placeholder="Để trống sẽ tự sinh (HD-MM/YYYY-001)"
                       />
-                      {formErrors.invoiceNumber && <span className="form-error">{formErrors.invoiceNumber}</span>}
+                      <span style={{ fontSize: '0.72rem', color: '#94a3b8', marginTop: '2px' }}>Để trống để hệ thống tự sinh mã</span>
                     </div>
 
-                    <div className="form-field" style={{ marginBottom: 0 }}>
+                    <div className="form-field" style={{ marginBottom: 0 }} id="invoice-field-dueDate">
                       <label className="form-label">Hạn thanh toán <span className="form-required">*</span></label>
                       <DatePicker
                         selected={formData.dueDate ? new Date(formData.dueDate) : null}
@@ -1190,7 +1411,7 @@ export default function InvoicesPage() {
                     </div>
 
                     {/* Status (edit only) */}
-                    {modalMode === 'edit' ? (
+                    {modalMode === 'edit' && (
                       <div className="form-field" style={{ marginBottom: 0 }}>
                         <label className="form-label">Trạng thái</label>
                         <select className="form-select" value={formData.invoiceStatus}
@@ -1199,20 +1420,24 @@ export default function InvoicesPage() {
                           <option value="PAID">Đã thanh toán</option>
                         </select>
                       </div>
-                    ) : ( <div /> )}
+                    )}
                   </div>
                 </div>
 
                 {/* 3. Electric & Water Consumption */}
                 <div className="form-field form-field--full" style={{ padding: 0, background: '#ffffff', borderRadius: '8px', border: '1px solid #cbd5e1', marginBottom: 0, overflow: 'hidden', boxShadow: '0 2px 4px rgba(0,0,0,0.02)' }}>
-                  <div style={{ background: '#f1f5f9', padding: '0.85rem 1.25rem', borderBottom: '1px solid #cbd5e1', fontWeight: 600, color: '#0f172a', fontSize: '1.05rem' }}>
-                    {modalMode === 'create' ? '3' : '2'}. Dịch vụ Điện nước
+                  <div style={{ background: 'linear-gradient(135deg, #eff6ff, #dbeafe)', padding: '0.85rem 1.25rem', borderBottom: '1px solid #93c5fd', fontWeight: 600, color: '#1e40af', fontSize: '0.95rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ width: 18, height: 18 }}><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" /></svg>
+                    Dịch vụ Điện nước
                   </div>
                   <div style={{ padding: '1.25rem' }}>
                     {/* ELECTRIC SECTION */}
                     {activeFee && activeFee.useTieredElectric ? (
-                      <div style={{ marginBottom: '1.5rem', padding: '1.25rem', background: '#f8fafc', borderRadius: 8, border: '1px solid #e2e8f0', display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-                        <div style={{ fontWeight: 600, color: '#1d4ed8', fontSize: '0.95rem', marginBottom: '0.25rem' }}>Tính phí điện (Bậc thang)</div>
+                      <div style={{ marginBottom: '1rem', padding: '1.25rem', background: '#f8fafc', borderRadius: 8, border: '1px solid #e2e8f0', display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                        <div style={{ fontWeight: 600, color: '#1d4ed8', fontSize: '0.9rem', display: 'flex', alignItems: 'center', gap: 6 }}>
+                          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ width: 16, height: 16 }}><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" /></svg>
+                          Tính phí điện (Bậc thang)
+                        </div>
                         <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1fr) minmax(0,1fr) minmax(0,1fr)', gap: '0.75rem' }}>
                           <div className="form-field" style={{ marginBottom: 0 }}>
                             <label className="form-label" style={{ fontSize: '0.8rem' }}>Từ ngày</label>
@@ -1243,89 +1468,72 @@ export default function InvoicesPage() {
                             <input type="number" className="form-input" value={formData.numberOfHouseholds} onChange={(e) => handleFormChange('numberOfHouseholds', e.target.value)} min="1" step="1" />
                           </div>
                         </div>
-                        <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1fr) minmax(0,1fr)', gap: '1rem', alignItems: 'start' }}>
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', alignItems: 'end' }}>
                           <div className="form-field" style={{ marginBottom: 0 }}>
                             <label className="form-label" style={{ fontSize: '0.8rem' }}>Số điện tiêu thụ (kWh)</label>
-                            <input 
-                              type="text" 
-                              className="form-input" 
-                              value={formatInputCurrency(formData.electricQuantity)} 
-                              onChange={(e) => handleFormChange('electricQuantity', parseInputCurrency(e.target.value))} 
-                              placeholder="Nhập số điện..." 
-                              readOnly={!!(!evnMockInfo.loading && evnMockInfo.data)}
-                              style={{ background: (!evnMockInfo.loading && evnMockInfo.data) ? '#f1f5f9' : '#fff' }}
-                            />
-                            {modalMode === 'create' && activeFee?.useTieredElectric && formData.apartmentId && (
-                               <div style={{ marginTop: '0.5rem', fontSize: '0.75rem', fontWeight: 500 }}>
-                                  {evnMockInfo.loading && <span style={{ color: '#d97706' }}>Đang kết nối API EVN NPC...</span>}
-                                  {!evnMockInfo.loading && evnMockInfo.error && <span style={{ color: '#dc2626' }}>{evnMockInfo.error}</span>}
-                                  {!evnMockInfo.loading && evnMockInfo.data && (
-                                      <span style={{ color: '#059669' }}>
-                                        ✓ EVN NPC: {evnMockInfo.data.customerName || 'N/A'} - {evnMockInfo.data.kwhConsumed} kWh (Kỳ: {evnMockInfo.data.billingPeriod || 'N/A'})
-                                      </span>
-                                  )}
-                               </div>
-                            )}
+                            <input type="text" className="form-input" value={formatInputCurrency(formData.electricQuantity)} onChange={(e) => handleFormChange('electricQuantity', parseInputCurrency(e.target.value))} placeholder="Nhập số điện..." readOnly={!!(!evnMockInfo.loading && evnMockInfo.data)} style={{ background: (!evnMockInfo.loading && evnMockInfo.data) ? '#f1f5f9' : '#fff' }} />
                           </div>
                           <div className="form-field" style={{ marginBottom: 0 }}>
-                            <label className="form-label" style={{ fontSize: '0.8rem', color: '#047857' }}>Tổng tiền điện (VNĐ)</label>
-                            <div style={{ display: 'flex', gap: '0.75rem' }}>
-                              <input type="text" className="form-input" value={formatInputCurrency(formData.electricFee)} readOnly placeholder="Nhấp Tính phí..." style={{ background: '#d1fae5', color: '#047857', cursor: 'default', fontWeight: 600, flex: 1 }} />
-                              <button type="button" className="btn btn--primary" style={{ padding: '0.55rem 1.25rem', height: '38px', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }} onClick={handleCalculateElectric} disabled={isCalculatingElectric || !formData.electricQuantity || !formData.electricStartDate || !formData.electricEndDate}>
-                                {isCalculatingElectric ? <div className="spinner" style={{width: 16, height: 16, margin: 0}} /> : "Tính phí"}
-                              </button>
+                            <label className="form-label" style={{ fontSize: '0.8rem', color: '#047857' }}>Tổng tiền điện</label>
+                            <div style={{ position: 'relative' }}>
+                              <input type="text" className="form-input" value={formatInputCurrency(formData.electricFee)} readOnly placeholder="Tự động tính..." style={{ background: '#d1fae5', color: '#047857', cursor: 'default', fontWeight: 600 }} />
+                              {isCalculatingElectric && (
+                                <div style={{ position: 'absolute', right: 12, top: '50%', transform: 'translateY(-50%)' }}>
+                                  <div className="spinner" style={{ width: 16, height: 16, margin: 0 }} />
+                                </div>
+                              )}
                             </div>
                           </div>
                         </div>
+                        {modalMode === 'create' && activeFee?.useTieredElectric && formData.apartmentId && (
+                          <div style={{ fontSize: '0.75rem', fontWeight: 500 }}>
+                            {evnMockInfo.loading && <span style={{ color: '#d97706' }}>⏳ Đang kết nối EVN...</span>}
+                            {!evnMockInfo.loading && evnMockInfo.error && <span style={{ color: '#dc2626' }}>⚠ {evnMockInfo.error}</span>}
+                            {!evnMockInfo.loading && evnMockInfo.data && <span style={{ color: '#059669' }}>✓ EVN: {evnMockInfo.data.kwhConsumed} kWh · Kỳ {evnMockInfo.data.billingPeriod || 'N/A'}</span>}
+                          </div>
+                        )}
                       </div>
                     ) : (
-                      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1fr) minmax(0,1fr)', gap: '1rem', marginBottom: '1.5rem', paddingBottom: '1.5rem', borderBottom: '1px dashed #cbd5e1' }}>
-                        <div className="form-field" style={{ marginBottom: 0 }}>
-                          <label className="form-label" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                            Điện tiêu thụ (kWh)
-                            {activeFee && activeFee.electricFee > 0 && (
-                              <span style={{ color: '#e74c3c', fontSize: '0.8rem', fontWeight: 600 }}>
-                                {shortMoney(activeFee.electricFee)}/kWh
-                              </span>
-                            )}
-                          </label>
-                          <input 
-                            type="text" 
-                            className="form-input" 
-                            value={formatInputCurrency(formData.electricQuantity)}
-                            onChange={(e) => handleFormChange('electricQuantity', parseInputCurrency(e.target.value))}
-                            placeholder="Nhập số điện..." 
-                          />
+                      <div style={{ marginBottom: '1rem', padding: '1.25rem', background: '#f8fafc', borderRadius: 8, border: '1px solid #e2e8f0' }}>
+                        <div style={{ fontWeight: 600, color: '#1d4ed8', fontSize: '0.9rem', marginBottom: '0.75rem', display: 'flex', alignItems: 'center', gap: 6 }}>
+                          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ width: 16, height: 16 }}><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" /></svg>
+                          Tiền điện
                         </div>
-                        <div className="form-field" style={{ marginBottom: 0 }}>
-                          <label className="form-label" style={{ color: '#047857' }}>Tổng tiền điện (VNĐ)</label>
-                          <input type="text" className="form-input" value={formatInputCurrency(formData.electricFee)} readOnly placeholder="Tự động tính từ số điện" style={{ background: '#d1fae5', color: '#047857', cursor: 'default', fontWeight: 600 }} />
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+                          <div className="form-field" style={{ marginBottom: 0 }}>
+                            <label className="form-label" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>Điện tiêu thụ (kWh) {activeFee && activeFee.electricFee > 0 && <span style={{ color: '#e74c3c', fontSize: '0.8rem', fontWeight: 600 }}>{shortMoney(activeFee.electricFee)}/kWh</span>}</label>
+                            <input type="text" className="form-input" value={formatInputCurrency(formData.electricQuantity)} onChange={(e) => handleFormChange('electricQuantity', parseInputCurrency(e.target.value))} placeholder="Nhập số điện..." />
+                          </div>
+                          <div className="form-field" style={{ marginBottom: 0 }}>
+                            <label className="form-label" style={{ color: '#047857' }}>Tổng tiền điện</label>
+                            <input type="text" className="form-input" value={formatInputCurrency(formData.electricFee)} readOnly placeholder="Tự động tính" style={{ background: '#d1fae5', color: '#047857', cursor: 'default', fontWeight: 600 }} />
+                          </div>
                         </div>
                       </div>
                     )}
 
                     {/* WATER SECTION */}
-                    <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1fr) minmax(0,1fr)', gap: '1rem' }}>
-                      <div className="form-field" style={{ marginBottom: 0 }}>
-                        <label className="form-label" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                          Nước tiêu thụ (m³)
-                          {activeFee && activeFee.waterFee > 0 && (
-                            <span style={{ color: '#e74c3c', fontSize: '0.8rem', fontWeight: 600 }}>
-                              {shortMoney(activeFee.waterFee)}/m³
-                            </span>
-                          )}
-                        </label>
-                        <input 
-                          type="text" 
-                          className="form-input" 
-                          value={formatInputCurrency(formData.waterQuantity)}
-                          onChange={(e) => handleFormChange('waterQuantity', parseInputCurrency(e.target.value))}
-                          placeholder="Nhập số khối nước..." 
-                        />
+                    <div style={{ padding: '1.25rem', background: '#f8fafc', borderRadius: 8, border: '1px solid #e2e8f0' }}>
+                      <div style={{ fontWeight: 600, color: '#0369a1', fontSize: '0.9rem', marginBottom: '0.75rem', display: 'flex', alignItems: 'center', gap: 6 }}>
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ width: 16, height: 16 }}><path d="M12 2.69l5.66 5.66a8 8 0 1 1-11.31 0z" /></svg>
+                        Tiền nước
                       </div>
-                      <div className="form-field" style={{ marginBottom: 0 }}>
-                        <label className="form-label" style={{ color: '#047857' }}>Tổng tiền nước (VNĐ)</label>
-                        <input type="text" className="form-input" value={formatInputCurrency(formData.waterFee)} readOnly placeholder="Tự động tính từ chỉ số" style={{ background: '#d1fae5', color: '#047857', cursor: 'default', fontWeight: 600 }} />
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+                        <div className="form-field" style={{ marginBottom: 0 }}>
+                          <label className="form-label" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>Nước tiêu thụ (m³) {activeFee && activeFee.waterFee > 0 && <span style={{ color: '#e74c3c', fontSize: '0.8rem', fontWeight: 600 }}>{shortMoney(activeFee.waterFee)}/m³</span>}</label>
+                          <input type="text" className="form-input" value={formatInputCurrency(formData.waterQuantity)} onChange={(e) => handleFormChange('waterQuantity', parseInputCurrency(e.target.value))} placeholder="Nhập số khối nước..." readOnly={!!(!waterMockInfo.loading && waterMockInfo.data)} style={{ background: (!waterMockInfo.loading && waterMockInfo.data) ? '#f1f5f9' : '#fff' }} />
+                          {modalMode === 'create' && formData.apartmentId && (
+                            <div style={{ marginTop: '0.4rem', fontSize: '0.75rem', fontWeight: 500 }}>
+                              {waterMockInfo.loading && <span style={{ color: '#d97706' }}>Đang kết nối Công ty nước...</span>}
+                              {!waterMockInfo.loading && waterMockInfo.error && <span style={{ color: '#dc2626' }}>{waterMockInfo.error}</span>}
+                              {!waterMockInfo.loading && waterMockInfo.data && <span style={{ color: '#059669' }}>✓ Nước: {waterMockInfo.data.cubicMeterConsumed} m³ (Kỳ: {waterMockInfo.data.billingPeriod || 'N/A'})</span>}
+                            </div>
+                          )}
+                        </div>
+                        <div className="form-field" style={{ marginBottom: 0 }}>
+                          <label className="form-label" style={{ color: '#047857' }}>Tổng tiền nước</label>
+                          <input type="text" className="form-input" value={formatInputCurrency(formData.waterFee)} readOnly placeholder="Tự động tính" style={{ background: '#d1fae5', color: '#047857', cursor: 'default', fontWeight: 600 }} />
+                        </div>
                       </div>
                     </div>
                   </div>
@@ -1333,8 +1541,9 @@ export default function InvoicesPage() {
 
                 {/* 4. Other Fees */}
                 <div className="form-field form-field--full" style={{ padding: 0, background: '#ffffff', borderRadius: '8px', border: '1px solid #cbd5e1', marginBottom: 0, overflow: 'hidden', boxShadow: '0 2px 4px rgba(0,0,0,0.02)' }}>
-                  <div style={{ background: '#f1f5f9', padding: '0.85rem 1.25rem', borderBottom: '1px solid #cbd5e1', fontWeight: 600, color: '#0f172a', fontSize: '1.05rem' }}>
-                    {modalMode === 'create' ? '4' : '3'}. Các loại phí khác
+                  <div style={{ background: 'linear-gradient(135deg, #fefce8, #fef9c3)', padding: '0.85rem 1.25rem', borderBottom: '1px solid #fde68a', fontWeight: 600, color: '#92400e', fontSize: '0.95rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ width: 18, height: 18 }}><line x1="12" y1="1" x2="12" y2="23" /><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" /></svg>
+                    Các loại phí khác
                   </div>
                   <div style={{ padding: '1.25rem', display: 'grid', gridTemplateColumns: 'minmax(0,1fr) minmax(0,1fr)', gap: '1rem' }}>
                     <div className="form-field" style={{ marginBottom: 0 }}>
@@ -1365,6 +1574,16 @@ export default function InvoicesPage() {
                 </div>
               </div>
 
+              {/* Live total preview */}
+              {(() => {
+                const total = (Number(formData.electricFee) || 0) + (Number(formData.waterFee) || 0) + (Number(formData.managementFee) || 0) + (Number(formData.parkingFee) || 0) + (Number(formData.otherFee) || 0);
+                return (
+                  <div style={{ padding: '0.75rem 1.5rem', background: 'linear-gradient(135deg, #fef2f2, #fee2e2)', borderTop: '2px solid #fca5a5', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <span style={{ fontSize: '0.9rem', fontWeight: 600, color: '#991b1b' }}>Tổng tạm tính</span>
+                    <span style={{ fontSize: '1.25rem', fontWeight: 800, color: '#dc2626', letterSpacing: '-0.02em' }}>{money(total)}</span>
+                  </div>
+                );
+              })()}
               <div className="modal__footer">
                 <button type="button" className="btn btn--ghost" onClick={() => setModalOpen(false)}>Hủy</button>
                 <button type="submit" className="btn btn--primary" disabled={submitting}>
@@ -1379,7 +1598,7 @@ export default function InvoicesPage() {
       {/* ═══════════ VIEW MODAL ═══════════ */}
       {modalOpen && modalMode === 'view' && selectedInvoice && (
         <div className="modal-overlay" onClick={() => setModalOpen(false)}>
-          <div className="modal" onClick={(e) => e.stopPropagation()}>
+          <div className="modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '720px', width: '95%' }}>
             <div className="modal__header">
               <h3 className="modal__title">Chi tiết hóa đơn</h3>
               <button className="modal__close" onClick={() => setModalOpen(false)}>{Icons.close}</button>
@@ -1449,6 +1668,7 @@ export default function InvoicesPage() {
                     <thead>
                       <tr>
                         <th>Mã GD</th>
+                        <th>Người thanh toán</th>
                         <th>Số tiền</th>
                         <th>Thời gian</th>
                         <th>Phương thức</th>
@@ -1461,6 +1681,14 @@ export default function InvoicesPage() {
                         return (
                           <tr key={p.paymentId}>
                             <td style={{ fontSize: '0.85rem' }}>{p.transactionCode || '—'}</td>
+                            <td>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                                <svg viewBox="0 0 24 24" fill="none" stroke="#64748b" strokeWidth="2" style={{ width: 14, height: 14, flexShrink: 0 }}>
+                                  <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" /><circle cx="12" cy="7" r="4" />
+                                </svg>
+                                <span style={{ fontWeight: 500, color: '#334155' }}>{p.payerName || '—'}</span>
+                              </div>
+                            </td>
                             <td>{money(p.amount)}</td>
                             <td>{formatDateTime(p.paymentDateTime)}</td>
                             <td>{p.paymentMethod || '—'}</td>
@@ -1479,12 +1707,12 @@ export default function InvoicesPage() {
             </div>
             <div className="modal__footer">
               <button className="btn btn--ghost" onClick={() => setModalOpen(false)}>Đóng</button>
-              {selectedInvoice.invoiceStatus === 'UNPAID' && (
+              {(selectedInvoice.invoiceStatus === 'UNPAID' || selectedInvoice.invoiceStatus === 'OVERDUE') && (
                 <button
                   className="btn"
-                  onClick={() => handleVnpayPayment(selectedInvoice.invoiceId)}
+                  onClick={() => { setModalOpen(false); setTimeout(() => openPaymentModal(selectedInvoice.invoiceId), 100); }}
                   style={{
-                    background: 'linear-gradient(135deg, #0066cc, #004499)',
+                    background: 'linear-gradient(135deg, #16a34a, #15803d)',
                     color: '#fff',
                     border: 'none',
                     display: 'flex',
@@ -1492,12 +1720,74 @@ export default function InvoicesPage() {
                     gap: '0.5rem',
                   }}
                 >
-                  <span className="btn__icon">{Icons.vnpay}</span>
-                  Thanh toán VNPay
+                  <span className="btn__icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ width: 16, height: 16 }}><rect x="1" y="4" width="22" height="16" rx="2" ry="2" /><line x1="1" y1="10" x2="23" y2="10" /></svg></span>
+                  Thanh toán
                 </button>
               )}
               <button className="btn btn--primary" onClick={() => { setModalOpen(false); setTimeout(() => openEditModal(selectedInvoice), 100); }}>
                 Chỉnh sửa
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ═══════════ PAYMENT METHOD MODAL ═══════════ */}
+      {payModalOpen && (
+        <div className="modal-overlay" onClick={() => setPayModalOpen(false)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '560px', width: '90%' }}>
+            <div className="modal__header">
+              <h3 className="modal__title">Chọn phương thức thanh toán</h3>
+              <button className="modal__close" onClick={() => setPayModalOpen(false)}>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></svg>
+              </button>
+            </div>
+            <div className="modal__body">
+              {/* Method selection */}
+              <div style={{ display: 'flex', gap: '0.6rem', marginBottom: '1.2rem' }}>
+                {[
+                  { value: 'CASH', label: 'Tiền mặt', icon: '💵', color: '#16a34a', bg: '#dcfce7' },
+                  { value: 'MOMO', label: 'MoMo', icon: '📱', color: '#ae2070', bg: '#fce4ec' },
+                ].map((m) => (
+                  <button key={m.value} type="button"
+                    onClick={() => setPayMethod(m.value)}
+                    style={{
+                      flex: 1, padding: '1rem 0.5rem', borderRadius: 10,
+                      border: payMethod === m.value ? `2px solid ${m.color}` : '2px solid #e2e8f0',
+                      background: payMethod === m.value ? m.bg : '#fff',
+                      cursor: 'pointer', textAlign: 'center',
+                      transition: 'all 0.2s ease',
+                      transform: payMethod === m.value ? 'scale(1.03)' : 'scale(1)',
+                      boxShadow: payMethod === m.value ? `0 4px 12px ${m.color}22` : 'none',
+                    }}>
+                    <div style={{ fontSize: '1.6rem', marginBottom: '0.3rem' }}>{m.icon}</div>
+                    <div style={{ fontSize: '0.82rem', fontWeight: 600, color: payMethod === m.value ? m.color : '#64748b' }}>{m.label}</div>
+                  </button>
+                ))}
+              </div>
+
+              {/* MoMo info */}
+              {payMethod === 'MOMO' && (
+                <div style={{ padding: '0.75rem 1rem', background: '#fce4ec', borderRadius: 8, fontSize: '0.85rem', color: '#880e4f' }}>
+                  Bạn sẽ được chuyển sang trang MoMo để thanh toán trực tuyến.
+                </div>
+              )}
+
+              {/* Cash form */}
+              {payMethod === 'CASH' && (
+                <div className="form-field">
+                  <label className="form-label">Ghi chú</label>
+                  <input className="form-input" value={payNote} onChange={(e) => setPayNote(e.target.value)}
+                    placeholder="VD: Nhận tiền mặt tại quầy lễ tân" />
+                </div>
+              )}
+            </div>
+            <div className="modal__footer">
+              <button className="btn btn--ghost" onClick={() => setPayModalOpen(false)}>Hủy</button>
+              <button className="btn btn--primary" onClick={handleManualPayment}
+                disabled={!payMethod || paySubmitting}
+                style={payMethod === 'MOMO' ? { background: 'linear-gradient(135deg, #ae2070, #880e4f)' } : {}}>
+                {paySubmitting ? 'Đang xử lý...' : payMethod === 'MOMO' ? '📱 Thanh toán MoMo' : payMethod === 'CASH' ? '💵 Xác nhận tiền mặt' : 'Chọn phương thức'}
               </button>
             </div>
           </div>
@@ -1758,6 +2048,155 @@ export default function InvoicesPage() {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* ═══ Batch Invoice Modal ═══ */}
+      {batchModalOpen && (
+        <div className="modal-overlay" onClick={() => setBatchModalOpen(false)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '700px' }}>
+            <div className="modal__header">
+              <h3 className="modal__title">Tạo hóa đơn hàng loạt</h3>
+              <button className="modal__close" onClick={() => setBatchModalOpen(false)}>{Icons.close}</button>
+            </div>
+            <div className="modal__body">
+              <div className="form-grid">
+                {/* Bảng phí */}
+                <div className="form-field form-field--full">
+                  <label className="form-label">Bảng phí áp dụng <span className="form-required">*</span></label>
+                  <select className="form-select" value={batchFeeIndex} onChange={(e) => setBatchFeeIndex(Number(e.target.value))}>
+                    {tableFees.map((f, i) => (
+                      <option key={f.id} value={i}>{f.title || `Bảng phí #${f.id}`}</option>
+                    ))}
+                  </select>
+                </div>
+                {/* Hạn thanh toán + Đã chọn */}
+                <div className="form-field">
+                  <label className="form-label">Hạn thanh toán <span className="form-required">*</span></label>
+                  <input type="text" className="form-input" value={batchDueDate}
+                    onChange={(e) => {
+                      let v = e.target.value.replace(/[^0-9/]/g, '');
+                      if (v.length === 2 && !v.includes('/')) v += '/';
+                      if (v.length === 5 && v.split('/').length === 2) v += '/';
+                      if (v.length <= 10) setBatchDueDate(v);
+                    }}
+                    placeholder="dd/MM/yyyy" maxLength={10} />
+                </div>
+                <div className="form-field">
+                  <label className="form-label">Đã chọn</label>
+                  <input type="text" className="form-input" value={`${batchSelectedApts.length} / ${apartments.filter(a => a.ownerId || a.residents?.some(r => r.relationshipType === 'TENANT')).length} căn hộ`} readOnly
+                    style={{ fontWeight: 600, cursor: 'default', background: 'var(--bg-card, #f8fafc)' }} />
+                </div>
+              </div>
+              {/* Chọn căn hộ */}
+              <div style={{ marginTop: '1rem' }}>
+                <label className="form-label">Chọn căn hộ</label>
+                <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
+                  <select className="form-select" value={batchFilterBlock} onChange={(e) => { setBatchFilterBlock(e.target.value); setBatchFilterFloor(''); }}
+                    style={{ width: 'auto', minWidth: '120px' }}>
+                    <option value="">Tất cả tòa</option>
+                    {[...new Set(apartments.map(a => a.block).filter(Boolean))].sort().map(b => (
+                      <option key={b} value={b}>Block {b}</option>
+                    ))}
+                  </select>
+                  <select className="form-select" value={batchFilterFloor} onChange={(e) => setBatchFilterFloor(e.target.value)}
+                    style={{ width: 'auto', minWidth: '120px' }}>
+                    <option value="">Tất cả tầng</option>
+                    {[...new Set(apartments
+                      .filter(a => !batchFilterBlock || a.block === batchFilterBlock)
+                      .map(a => a.floor).filter(f => f != null)
+                    )].sort((a, b) => a - b).map(f => (
+                      <option key={f} value={f}>Tầng {f}</option>
+                    ))}
+                  </select>
+                  <button type="button" className="btn btn--ghost btn--sm" onClick={() => {
+                    const filtered = apartments.filter(a => (!batchFilterBlock || a.block === batchFilterBlock) && (!batchFilterFloor || String(a.floor) === String(batchFilterFloor)) && (a.ownerId || a.residents?.some(r => r.relationshipType === 'TENANT')));
+                    setBatchSelectedApts(prev => [...new Set([...prev, ...filtered.map(a => a.id)])]);
+                  }}>Chọn tất cả</button>
+                  <button type="button" className="btn btn--ghost btn--sm" onClick={() => {
+                    const filtered = apartments.filter(a => (!batchFilterBlock || a.block === batchFilterBlock) && (!batchFilterFloor || String(a.floor) === String(batchFilterFloor)) && (a.ownerId || a.residents?.some(r => r.relationshipType === 'TENANT')));
+                    const filteredIds = new Set(filtered.map(a => a.id));
+                    setBatchSelectedApts(prev => prev.filter(id => !filteredIds.has(id)));
+                  }}>Bỏ chọn</button>
+                </div>
+                <div style={{ maxHeight: '280px', overflowY: 'auto', border: '1px solid var(--border, #e2e8f0)', borderRadius: '0.5rem' }}>
+                  {apartments
+                    .filter(apt => (!batchFilterBlock || apt.block === batchFilterBlock) && (!batchFilterFloor || String(apt.floor) === String(batchFilterFloor)))
+                    .filter(apt => apt.ownerId || apt.residents?.some(r => r.relationshipType === 'TENANT'))
+                    .map((apt) => {
+                      const checked = batchSelectedApts.includes(apt.id);
+                      const owner = apt.ownerId && apt.residents?.find(r => r.residentId === apt.ownerId);
+                      const tenant = apt.residents?.find(r => r.relationshipType === 'TENANT');
+                      const badgeStyle = (isOwner) => ({
+                        fontSize: '0.6rem', padding: '0px 4px', borderRadius: '3px', fontWeight: 700, whiteSpace: 'nowrap',
+                        background: isOwner ? '#dcfce7' : '#dbeafe',
+                        color: isOwner ? '#166534' : '#1e40af',
+                        marginLeft: '3px', verticalAlign: 'middle',
+                      });
+                      return (
+                        <label key={apt.id} style={{
+                          display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0.75rem',
+                          cursor: 'pointer', borderBottom: '1px solid #f1f5f9',
+                          background: checked ? '#eef2ff' : 'transparent',
+                          transition: 'background 0.15s',
+                        }}>
+                          <input type="checkbox" checked={checked}
+                            onChange={() => setBatchSelectedApts(prev => checked ? prev.filter(id => id !== apt.id) : [...prev, apt.id])}
+                            style={{ width: '15px', height: '15px', flexShrink: 0, accentColor: '#6366f1' }} />
+                          <span style={{ fontWeight: 600, fontSize: '0.82rem', color: '#1e293b', minWidth: '48px' }}>{apt.apartmentNumber}</span>
+                          <span style={{ fontSize: '0.72rem', color: '#94a3b8', minWidth: '90px', flexShrink: 0 }}>T{apt.floor} - {apt.block}</span>
+                          <div style={{ flex: 1, display: 'flex', flexWrap: 'wrap', gap: '0.15rem 0.75rem', justifyContent: 'flex-end', fontSize: '0.78rem' }}>
+                            {owner && (
+                              <span style={{ color: '#334155', whiteSpace: 'nowrap' }}>
+                                {owner.fullName}<span style={badgeStyle(true)}>Chủ</span>
+                                {owner.phone && <span style={{ color: '#94a3b8', marginLeft: '4px' }}>{owner.phone}</span>}
+                              </span>
+                            )}
+                            {tenant && (
+                              <span style={{ color: '#334155', whiteSpace: 'nowrap' }}>
+                                {tenant.fullName}<span style={badgeStyle(false)}>Thuê</span>
+                                {tenant.phone && <span style={{ color: '#94a3b8', marginLeft: '4px' }}>{tenant.phone}</span>}
+                              </span>
+                            )}
+                          </div>
+                        </label>
+                      );
+                    })}
+                </div>
+              </div>
+            </div>
+            <div className="modal__footer">
+              <button className="btn btn--ghost" onClick={() => setBatchModalOpen(false)}>Hủy</button>
+              <button className="btn btn--primary" disabled={batchSubmitting || batchSelectedApts.length === 0 || !batchDueDate}
+                onClick={async () => {
+                  setBatchSubmitting(true);
+                  try {
+                    const user = JSON.parse(localStorage.getItem('user') || '{}');
+                    const fee = tableFees[batchFeeIndex];
+                      const [dd, mm, yyyy] = batchDueDate.split('/');
+                      const res = await invoiceService.batchCreate({
+                      apartmentIds: batchSelectedApts,
+                      dueDate: `${yyyy}-${mm}-${dd}`,
+                      creatorId: user.id,
+                      tableFeeId: fee.id,
+                    });
+                    if (res.data?.status) {
+                      toast.success(`Đã tạo ${res.data.data.length} hóa đơn thành công!`);
+                      setBatchModalOpen(false);
+                      fetchInvoices();
+                    } else {
+                      toast.error(res.data?.message || 'Tạo hàng loạt thất bại');
+                    }
+                  } catch (err) {
+                    toast.error(err.response?.data?.message || 'Có lỗi xảy ra');
+                  } finally {
+                    setBatchSubmitting(false);
+                  }
+                }}>
+                {batchSubmitting ? 'Đang xử lý...' : `Tạo ${batchSelectedApts.length} hóa đơn`}
+              </button>
+            </div>
           </div>
         </div>
       )}

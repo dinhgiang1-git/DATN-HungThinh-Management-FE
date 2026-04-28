@@ -12,6 +12,9 @@ import NotificationsPage from './pages/NotificationsPage';
 import FeedbacksPage from './pages/FeedbacksPage';
 import MaintenancesPage from './pages/MaintenancesPage';
 import InvoicesPage from './pages/InvoicesPage';
+import ContractsPage from './pages/ContractsPage';
+import VehiclesPage from './pages/VehiclesPage';
+import AuditLogsPage from './pages/AuditLogsPage';
 import Layout from './components/layout/Layout';
 import PaymentResultPage from './pages/PaymentResultPage';
 
@@ -85,7 +88,10 @@ function AppRoutes() {
         <Route path="notifications" element={<NotificationsPage />} />
         <Route path="feedbacks" element={<FeedbacksPage />} />
         <Route path="invoices" element={<InvoicesPage />} />
+        <Route path="contracts" element={<ContractsPage />} />
         <Route path="maintenances" element={<MaintenancesPage />} />
+        <Route path="vehicles" element={<VehiclesPage />} />
+        <Route path="audit-logs" element={<AuditLogsPage />} />
         <Route path="payment-result" element={<PaymentResultPage />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
