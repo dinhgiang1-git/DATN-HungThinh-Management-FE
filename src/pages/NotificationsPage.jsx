@@ -702,74 +702,125 @@ export default function NotificationsPage() {
       {modalOpen && modalMode === 'view' && selectedNotification && (
         <div className="modal-overlay" onClick={() => setModalOpen(false)}>
           <div className="modal modal--lg" onClick={(e) => e.stopPropagation()}>
-            <div className="modal__header">
-              <h3 className="modal__title">Chi tiết thông báo</h3>
-              <button className="modal__close" onClick={() => setModalOpen(false)}>
+            {/* Gradient header band */}
+            <div className="notif-detail-header">
+              <div className="notif-detail-header__icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+                  <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9" />
+                  <path d="M13.73 21a2 2 0 0 1-3.46 0" />
+                </svg>
+              </div>
+              <div className="notif-detail-header__info">
+                <h3 className="notif-detail-header__title">{selectedNotification.title}</h3>
+                <div className="notif-detail-header__meta">
+                  <span className="notif-detail-header__tag">#{selectedNotification.notificationId}</span>
+                  <span className="notif-detail-header__dot">·</span>
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ width: 12, height: 12, flexShrink: 0 }}>
+                    <circle cx="12" cy="12" r="10" /><polyline points="12 6 12 12 16 14" />
+                  </svg>
+                  <span>{formatDateTime(selectedNotification.sendTime)}</span>
+                </div>
+              </div>
+              <button className="notif-detail-header__close" onClick={() => setModalOpen(false)}>
                 {Icons.close}
               </button>
             </div>
-            <div className="modal__body">
-              {/* Notification Card */}
-              <div className="notif-card">
-                <div className="notif-card__header">
-                  <div className="notif-card__icon">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                      <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9" />
-                      <path d="M13.73 21a2 2 0 0 1-3.46 0" />
+
+            <div className="modal__body" style={{ padding: '0' }}>
+              {/* Info cards row */}
+              <div className="notif-detail-info">
+                <div className="notif-detail-info__card">
+                  <div className="notif-detail-info__icon" style={{ background: 'linear-gradient(135deg, #ede9fe, #ddd6fe)' }}>
+                    <svg viewBox="0 0 24 24" fill="none" stroke="#7c3aed" strokeWidth="2" style={{ width: 16, height: 16 }}>
+                      <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" />
+                      <path d="M23 21v-2a4 4 0 0 0-3-3.87" /><path d="M16 3.13a4 4 0 0 1 0 7.75" />
                     </svg>
                   </div>
-                  <div className="notif-card__header-info">
-                    <h3 className="notif-card__header-title">{selectedNotification.title}</h3>
-                    <div className="notif-card__header-sub">
-                      <span>#{selectedNotification.notificationId}</span>
-                      <span>•</span>
-                      <span>{formatDateTime(selectedNotification.sendTime)}</span>
-                    </div>
+                  <div className="notif-detail-info__text">
+                    <span className="notif-detail-info__label">Đối tượng</span>
+                    <span className="notif-detail-info__value">
+                      <span
+                        className="badge"
+                        style={{
+                          color: targetColor[selectedNotification.targetType]?.color || '#6b7280',
+                          backgroundColor: targetColor[selectedNotification.targetType]?.bg || '#f3f4f6',
+                          fontSize: '11px',
+                        }}
+                      >
+                        {targetLabel[selectedNotification.targetType] || selectedNotification.targetType}
+                      </span>
+                    </span>
                   </div>
                 </div>
-                <div className="notif-card__body">
-                  <div className="notif-card__meta">
-                    <div className="notif-card__meta-item">
-                      <span className="notif-card__meta-label">Đối tượng</span>
-                      <span className="notif-card__meta-value">
-                        <span
-                          className="badge"
-                          style={{
-                            color: targetColor[selectedNotification.targetType]?.color || '#6b7280',
-                            backgroundColor: targetColor[selectedNotification.targetType]?.bg || '#f3f4f6',
-                          }}
-                        >
-                          {targetLabel[selectedNotification.targetType] || selectedNotification.targetType}
-                        </span>
-                      </span>
-                    </div>
-                    <div className="notif-card__meta-item">
-                      <span className="notif-card__meta-label">Người gửi</span>
-                      <span className="notif-card__meta-value">{selectedNotification.sender?.fullName || '—'}</span>
-                    </div>
-                    <div className="notif-card__meta-item">
-                      <span className="notif-card__meta-label">Tổng người nhận</span>
-                      <span className="notif-card__meta-value">{selectedNotification.totalReceivers ?? 0} người</span>
-                    </div>
-                    <div className="notif-card__meta-item">
-                      <span className="notif-card__meta-label">Đã đọc</span>
-                      <span className="notif-card__meta-value" style={{ color: '#059669', fontWeight: 600 }}>
-                        {selectedNotification.readCount ?? 0}/{selectedNotification.totalReceivers ?? 0}
-                      </span>
-                    </div>
+
+                <div className="notif-detail-info__card">
+                  <div className="notif-detail-info__icon" style={{ background: 'linear-gradient(135deg, #dbeafe, #bfdbfe)' }}>
+                    <svg viewBox="0 0 24 24" fill="none" stroke="#2563eb" strokeWidth="2" style={{ width: 16, height: 16 }}>
+                      <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" /><circle cx="12" cy="7" r="4" />
+                    </svg>
                   </div>
-                  {selectedNotification.content && (
-                    <div className="notif-card__content">{selectedNotification.content}</div>
-                  )}
+                  <div className="notif-detail-info__text">
+                    <span className="notif-detail-info__label">Người gửi</span>
+                    <span className="notif-detail-info__value notif-detail-info__value--bold">{selectedNotification.sender?.fullName || '—'}</span>
+                  </div>
+                </div>
+
+                <div className="notif-detail-info__card">
+                  <div className="notif-detail-info__icon" style={{ background: 'linear-gradient(135deg, #fef3c7, #fde68a)' }}>
+                    <svg viewBox="0 0 24 24" fill="none" stroke="#d97706" strokeWidth="2" style={{ width: 16, height: 16 }}>
+                      <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" />
+                    </svg>
+                  </div>
+                  <div className="notif-detail-info__text">
+                    <span className="notif-detail-info__label">Tổng người nhận</span>
+                    <span className="notif-detail-info__value notif-detail-info__value--bold">{selectedNotification.totalReceivers ?? 0} người</span>
+                  </div>
+                </div>
+
+                <div className="notif-detail-info__card">
+                  <div className="notif-detail-info__icon" style={{ background: 'linear-gradient(135deg, #d1fae5, #a7f3d0)' }}>
+                    <svg viewBox="0 0 24 24" fill="none" stroke="#059669" strokeWidth="2" style={{ width: 16, height: 16 }}>
+                      <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" /><polyline points="22 4 12 14.01 9 11.01" />
+                    </svg>
+                  </div>
+                  <div className="notif-detail-info__text">
+                    <span className="notif-detail-info__label">Đã đọc</span>
+                    <span className="notif-detail-info__value notif-detail-info__value--success">
+                      {selectedNotification.readCount ?? 0}/{selectedNotification.totalReceivers ?? 0}
+                    </span>
+                  </div>
                 </div>
               </div>
 
+              {/* Content section */}
+              {selectedNotification.content && (
+                <div className="notif-detail-content">
+                  <div className="notif-detail-content__header">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ width: 15, height: 15 }}>
+                      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                      <polyline points="14 2 14 8 20 8" />
+                      <line x1="16" y1="13" x2="8" y2="13" />
+                      <line x1="16" y1="17" x2="8" y2="17" />
+                      <polyline points="10 9 9 9 8 9" />
+                    </svg>
+                    <span>Nội dung thông báo</span>
+                  </div>
+                  <div className="notif-detail-content__body">
+                    {selectedNotification.content}
+                  </div>
+                </div>
+              )}
+
               {/* Receivers Section */}
-              <div>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '10px' }}>
-                  <h4 style={{ fontSize: '0.88rem', fontWeight: 600, color: '#475569', margin: 0 }}>
-                    Danh sách người nhận ({receiverTotalElements})
-                  </h4>
+              <div className="notif-detail-receivers">
+                <div className="notif-detail-receivers__header">
+                  <div className="notif-detail-receivers__header-left">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ width: 15, height: 15, color: '#475569' }}>
+                      <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" />
+                      <path d="M23 21v-2a4 4 0 0 0-3-3.87" /><path d="M16 3.13a4 4 0 0 1 0 7.75" />
+                    </svg>
+                    <h4>Danh sách người nhận ({receiverTotalElements})</h4>
+                  </div>
                 </div>
 
                 {/* Search + Filter toolbar */}
