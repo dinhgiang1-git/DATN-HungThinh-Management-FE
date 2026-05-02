@@ -10,7 +10,9 @@ const paymentService = {
   createManualPayment: (data) => {
     return api.post('/api/v1/payment/manual', data);
   },
+  confirmCashPayment: (paymentId) => {
+    return api.patch(`/api/v1/payment/cash-request/${paymentId}/confirm`);
+  },
 };
 
 export default paymentService;
-

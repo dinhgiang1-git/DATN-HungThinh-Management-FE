@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { toast } from 'react-toastify';
 import deviceService from '../services/deviceService';
+import apartmentService from '../services/apartmentService';
 
 /* ─── constants ─── */
 const DEVICE_STATUSES = [
@@ -10,6 +11,16 @@ const DEVICE_STATUSES = [
   { value: 'UNDER_MAINTENANCE', label: 'Đang bảo trì' },
   { value: 'BROKEN', label: 'Hỏng' },
 ];
+
+const DEVICE_TYPES = [
+  { value: 'COMMON', label: 'Thiết bị chung' },
+  { value: 'APARTMENT', label: 'Thiết bị căn hộ' },
+];
+
+const typeLabel = {
+  COMMON: 'Thiết bị chung',
+  APARTMENT: 'Thiết bị căn hộ',
+};
 
 const statusLabel = {
   ACTIVE: 'Hoạt động',
@@ -75,6 +86,11 @@ const Icons = {
   ),
 };
 
+const getApartmentLabel = (apt) => {
+  if (!apt) return 'Dùng chung';
+  return `${apt.block ? `${apt.block}-` : ''}${apt.apartmentNumber || ''}${apt.floor != null ? ` (Tầng ${apt.floor})` : ''}`;
+};
+
 export default function DevicesPage() {
   /* ─── state ─── */
   const [devices, setDevices] = useState([]);
@@ -83,9 +99,14 @@ export default function DevicesPage() {
   const [totalPages, setTotalPages] = useState(0);
   const [totalElements, setTotalElements] = useState(0);
   const [filterStatus, setFilterStatus] = useState('');
+  const [filterType, setFilterType] = useState('');
   const [sortDirection, setSortDirection] = useState('asc');
   const [searchInput, setSearchInput] = useState('');
   const [searchKeyword, setSearchKeyword] = useState('');
+
+  // Apartments for selection
+  const [apartments, setApartments] = useState([]);
+  const [aptSearchKeyword, setAptSearchKeyword] = useState('');
 
   // Debounce search
   useEffect(() => {
@@ -98,6 +119,22 @@ export default function DevicesPage() {
     return () => clearTimeout(timer);
   }, [searchInput, searchKeyword]);
 
+  const [aptSearchInput, setAptSearchInput] = useState('');
+  const [aptLoading, setAptLoading] = useState(false);
+  const [aptPage, setAptPage] = useState(0);
+  const [aptTotalPages, setAptTotalPages] = useState(0);
+  const [aptBlock, setAptBlock] = useState('');
+  const [aptFloor, setAptFloor] = useState('');
+  const [aptHasDevices, setAptHasDevices] = useState(null); // null: All, true: Has, false: None
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setAptSearchKeyword(aptSearchInput);
+      setAptPage(0);
+    }, 500);
+    return () => clearTimeout(timer);
+  }, [aptSearchInput]);
+
   // Modal
   const [modalOpen, setModalOpen] = useState(false);
   const [modalMode, setModalMode] = useState('create');
@@ -108,6 +145,8 @@ export default function DevicesPage() {
     deviceStatus: 'ACTIVE',
     maintenanceCycleDay: '',
     installationDate: '',
+    apartmentId: '',
+    deviceType: 'COMMON',
   });
   const [formErrors, setFormErrors] = useState({});
   const [submitting, setSubmitting] = useState(false);
@@ -128,6 +167,7 @@ export default function DevicesPage() {
         direction: sortDirection,
       };
       if (filterStatus) params.deviceStatus = filterStatus;
+      if (filterType) params.deviceType = filterType;
       if (searchKeyword.trim()) params.keyword = searchKeyword.trim();
 
       const res = await deviceService.getAll(params);
@@ -141,11 +181,38 @@ export default function DevicesPage() {
     } finally {
       setLoading(false);
     }
-  }, [page, filterStatus, sortDirection, searchKeyword]);
+  }, [page, filterStatus, filterType, sortDirection, searchKeyword]);
 
   useEffect(() => {
     fetchDevices();
   }, [fetchDevices]);
+
+  useEffect(() => {
+    const fetchApts = async () => {
+      setAptLoading(true);
+      try {
+        const params = { 
+          page: aptPage, 
+          size: 12, // 12 items per page for the grid (3x4 or 4x3)
+          sortBy: 'apartmentNumber',
+          direction: 'asc'
+        };
+        if (aptSearchKeyword.trim()) params.keyword = aptSearchKeyword.trim();
+        if (aptBlock) params.block = aptBlock;
+        if (aptFloor) params.floor = Number(aptFloor);
+        if (aptHasDevices !== null) params.hasDevices = aptHasDevices;
+
+        const res = await apartmentService.getAll(params);
+        const data = res.data?.data;
+        setApartments(data?.content || []);
+        setAptTotalPages(data?.totalPages || 0);
+      } catch (err) { console.error(err); }
+      finally { setAptLoading(false); }
+    };
+    if (modalOpen && formData.deviceType === 'APARTMENT') {
+      fetchApts();
+    }
+  }, [aptSearchKeyword, aptPage, aptBlock, aptFloor, aptHasDevices, modalOpen, formData.deviceType]);
 
   /* ─── handlers ─── */
   const handleFilterStatus = (val) => { setFilterStatus(val); setPage(0); };
@@ -160,6 +227,8 @@ export default function DevicesPage() {
       deviceStatus: 'ACTIVE',
       maintenanceCycleDay: '',
       installationDate: '',
+      apartmentId: '',
+      deviceType: 'COMMON',
     });
     setFormErrors({});
     setModalOpen(true);
@@ -185,6 +254,8 @@ export default function DevicesPage() {
         }
         return '';
       })(),
+      apartmentId: dev.apartment?.apartmentId || '',
+      deviceType: dev.deviceType || 'COMMON',
     });
     setFormErrors({});
     setModalOpen(true);
@@ -202,6 +273,7 @@ export default function DevicesPage() {
     const errors = {};
     if (!formData.deviceName.trim()) errors.deviceName = 'Vui lòng nhập tên thiết bị';
     if (!formData.deviceStatus) errors.deviceStatus = 'Vui lòng chọn trạng thái';
+    if (formData.deviceType === 'APARTMENT' && !formData.apartmentId) errors.apartmentId = 'Vui lòng chọn căn hộ sở hữu';
     setFormErrors(errors);
     return Object.keys(errors).length === 0;
   };
@@ -217,6 +289,8 @@ export default function DevicesPage() {
         deviceStatus: formData.deviceStatus,
         maintenanceCycleDay: formData.maintenanceCycleDay ? Number(formData.maintenanceCycleDay) : undefined,
         installationDate: formData.installationDate || undefined,
+        apartmentId: formData.deviceType === 'APARTMENT' ? (formData.apartmentId || undefined) : undefined,
+        deviceType: formData.deviceType,
       };
 
       let res;
@@ -295,18 +369,39 @@ export default function DevicesPage() {
 
       {/* Filters */}
       <div className="page__filters">
-        <div className="filter-group">
-          <label className="filter-label">Trạng thái:</label>
-          <div className="filter-tabs">
-            {DEVICE_STATUSES.map((s) => (
-              <button
-                key={s.value}
-                className={`filter-tab ${filterStatus === s.value ? 'filter-tab--active' : ''}`}
-                onClick={() => handleFilterStatus(s.value)}
-              >
-                {s.label}
-              </button>
-            ))}
+        <div style={{ display: 'flex', gap: '24px', alignItems: 'center' }}>
+          <div className="filter-group">
+            <label className="filter-label">Trạng thái:</label>
+            <div className="filter-tabs">
+              {DEVICE_STATUSES.map((s) => (
+                <button
+                  key={s.value}
+                  className={`filter-tab ${filterStatus === s.value ? 'filter-tab--active' : ''}`}
+                  onClick={() => handleFilterStatus(s.value)}
+                >
+                  {s.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="filter-group">
+            <label className="filter-label">Loại thiết bị:</label>
+            <div className="filter-tabs">
+              {[
+                { val: '', label: 'Tất cả' },
+                { val: 'COMMON', label: 'Thiết bị chung' },
+                { val: 'APARTMENT', label: 'Thiết bị căn hộ' },
+              ].map((t) => (
+                <button
+                  key={t.val}
+                  className={`filter-tab ${filterType === t.val ? 'filter-tab--active' : ''}`}
+                  onClick={() => { setFilterType(t.val); setPage(0); }}
+                >
+                  {t.label}
+                </button>
+              ))}
+            </div>
           </div>
         </div>
 
@@ -347,7 +442,8 @@ export default function DevicesPage() {
               <tr>
                 <th className="data-table__th--id">ID</th>
                 <th>Tên thiết bị</th>
-                <th>Vị trí</th>
+                <th>Loại</th>
+                <th>Vị trí / Căn hộ</th>
                 <th>Chu kỳ bảo trì</th>
                 <th>Ngày lắp đặt</th>
                 <th>Trạng thái</th>
@@ -361,7 +457,18 @@ export default function DevicesPage() {
                   <tr key={dev.id}>
                     <td className="data-table__cell--id">{dev.id}</td>
                     <td className="data-table__cell--bold">{dev.deviceName}</td>
-                    <td>{dev.location || '—'}</td>
+                    <td>
+                      <span className={`badge ${dev.deviceType === 'COMMON' ? 'badge--ghost' : 'badge--info'}`}>
+                        {typeLabel[dev.deviceType] || dev.deviceType}
+                      </span>
+                    </td>
+                    <td>
+                      {dev.deviceType === 'COMMON' ? (
+                        dev.location || '—'
+                      ) : (
+                        getApartmentLabel(dev.apartment)
+                      )}
+                    </td>
                     <td>{dev.maintenanceCycleDay ? `${dev.maintenanceCycleDay} ngày` : '—'}</td>
                     <td>{formatDate(dev.installationDate)}</td>
                     <td>
@@ -432,7 +539,7 @@ export default function DevicesPage() {
       {/* Create / Edit Modal */}
       {modalOpen && (modalMode === 'create' || modalMode === 'edit') && (
         <div className="modal-overlay" onClick={() => setModalOpen(false)}>
-          <div className="modal" onClick={(e) => e.stopPropagation()}>
+          <div className="modal modal--lg" onClick={(e) => e.stopPropagation()}>
             <div className="modal__header">
               <h3 className="modal__title">
                 {modalMode === 'create' ? 'Thêm thiết bị mới' : 'Chỉnh sửa thiết bị'}
@@ -457,18 +564,45 @@ export default function DevicesPage() {
                   {formErrors.deviceName && <span className="form-error">{formErrors.deviceName}</span>}
                 </div>
 
-
-
-                {/* Location */}
-                <div className="form-field">
-                  <label className="form-label">Vị trí lắp đặt</label>
-                  <input
-                    className="form-input"
-                    value={formData.location}
-                    onChange={(e) => handleFormChange('location', e.target.value)}
-                    placeholder="VD: Tầng 1 - Sảnh chính, Tầng hầm B1..."
-                  />
+                {/* Device Type Selection */}
+                <div className="form-field form-field--full">
+                  <label className="form-label">
+                    Cấu hình sở hữu <span className="form-required">*</span>
+                  </label>
+                  <div className="segmented-control">
+                    {DEVICE_TYPES.map((t) => (
+                      <button
+                        key={t.value}
+                        type="button"
+                        className={`segmented-control__item ${formData.deviceType === t.value ? 'segmented-control__item--active' : ''}`}
+                        onClick={() => {
+                          handleFormChange('deviceType', t.value);
+                          if (t.value === 'COMMON') handleFormChange('apartmentId', '');
+                        }}
+                      >
+                        {t.label}
+                      </button>
+                    ))}
+                  </div>
+                  <p className="form-help" style={{ marginTop: '8px', fontSize: '12px', color: 'var(--text-muted)' }}>
+                    {formData.deviceType === 'COMMON' 
+                      ? 'Thiết bị thuộc quyền quản lý chung của tòa nhà, không gắn liền với căn hộ cụ thể.' 
+                      : 'Thiết bị thuộc sở hữu hoặc lắp đặt riêng trong căn hộ của cư dân.'}
+                  </p>
                 </div>
+
+                {/* Location (for COMMON) */}
+                {formData.deviceType === 'COMMON' && (
+                  <div className="form-field">
+                    <label className="form-label">Vị trí lắp đặt</label>
+                    <input
+                      className="form-input"
+                      value={formData.location}
+                      onChange={(e) => handleFormChange('location', e.target.value)}
+                      placeholder="VD: Tầng 1 - Sảnh chính, Tầng hầm B1..."
+                    />
+                  </div>
+                )}
 
                 {/* Status */}
                 <div className="form-field">
@@ -511,6 +645,135 @@ export default function DevicesPage() {
                     placeholder="VD: 30, 90, 180..."
                   />
                 </div>
+
+                {/* Apartment Selection Grid with Filters & Pagination */}
+                {formData.deviceType === 'APARTMENT' && (
+                  <div className="form-field form-field--full" style={{ borderTop: '1px solid var(--border-color)', paddingTop: '20px', marginTop: '10px' }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', marginBottom: '16px' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <div>
+                          <label className="form-label" style={{ marginBottom: '4px' }}>Hệ thống căn hộ <span className="form-required">*</span></label>
+                          <p style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Chọn căn hộ mục tiêu để quản lý thiết bị</p>
+                        </div>
+                        <div className="search-box" style={{ width: '320px' }}>
+                          <span className="search-box__icon">{Icons.search}</span>
+                          <input
+                            type="text"
+                            className="search-input"
+                            placeholder="Gõ số phòng (VD: A101)..."
+                            value={aptSearchInput}
+                            onChange={(e) => setAptSearchInput(e.target.value)}
+                          />
+                        </div>
+                      </div>
+
+                      {/* Advanced Filters Row with Labels */}
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1.5fr', gap: '15px', background: '#f8fafc', padding: '15px', borderRadius: '12px', border: '1px solid var(--border-color)' }}>
+                        <div className="form-field" style={{ marginBottom: 0 }}>
+                          <label className="form-label" style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Tòa nhà / Block</label>
+                          <select className="form-select form-select--sm" value={aptBlock} onChange={(e) => { setAptBlock(e.target.value); setAptPage(0); }}>
+                            <option value="">Tất cả các tòa</option>
+                            <option value="A">Block A</option>
+                            <option value="B">Block B</option>
+                            <option value="C">Block C</option>
+                            <option value="D">Block D</option>
+                          </select>
+                        </div>
+                        <div className="form-field" style={{ marginBottom: 0 }}>
+                          <label className="form-label" style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Tầng số</label>
+                          <input 
+                            type="number" 
+                            className="form-input form-input--sm" 
+                            placeholder="Nhập tầng..." 
+                            value={aptFloor} 
+                            onChange={(e) => { setAptFloor(e.target.value); setAptPage(0); }} 
+                          />
+                        </div>
+                        <div className="form-field" style={{ marginBottom: 0 }}>
+                          <label className="form-label" style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Trạng thái thiết bị</label>
+                          <select className="form-select form-select--sm" value={aptHasDevices === null ? '' : String(aptHasDevices)} onChange={(e) => { 
+                            const val = e.target.value;
+                            setAptHasDevices(val === '' ? null : val === 'true');
+                            setAptPage(0);
+                          }}>
+                            <option value="">Tất cả căn hộ</option>
+                            <option value="true">Đã trang bị thiết bị</option>
+                            <option value="false">Chưa có thiết bị nào</option>
+                          </select>
+                        </div>
+                      </div>
+                    </div>
+                    
+                    <div className="apartment-grid" style={{ maxHeight: '280px', overflowY: 'auto', padding: '4px', position: 'relative' }}>
+                      {aptLoading ? (
+                        <div className="page__loading" style={{ gridColumn: '1/-1', padding: '2rem' }}>
+                          <div className="spinner" />
+                          <span>Đang tìm kiếm...</span>
+                        </div>
+                      ) : apartments.length === 0 ? (
+                        <div className="page__empty" style={{ gridColumn: '1/-1' }}>
+                          <p>Không tìm thấy căn hộ nào khớp với "{aptSearchKeyword}"</p>
+                        </div>
+                      ) : apartments.map((a) => {
+                          const selected = String(formData.apartmentId) === String(a.id);
+                          const ownerName = a.residents?.find(r => r.relationshipType === 'OWNER')?.fullName || a.residents?.[0]?.fullName || 'Chưa có cư dân';
+                          
+                          return (
+                            <div
+                              key={a.id}
+                              className={`apartment-card ${selected ? 'apartment-card--active' : ''}`}
+                              onClick={() => handleFormChange('apartmentId', a.id)}
+                              style={{ minHeight: '100px', justifyContent: 'space-between' }}
+                            >
+                              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                                <span className="apartment-card__number">{a.apartmentNumber}</span>
+                                <div style={{ display: 'flex', gap: '4px' }}>
+                                  <span className={`badge ${a.deviceCount > 0 ? 'badge--info' : 'badge--ghost'}`} style={{ fontSize: '10px', padding: '2px 6px' }}>
+                                    {a.deviceCount || 0} TB
+                                  </span>
+                                  {selected && <span style={{ color: 'var(--accent)' }}>{Icons.check}</span>}
+                                </div>
+                              </div>
+                              <div className="apartment-card__info">
+                                <span>Block {a.block} • Tầng {a.floor}</span>
+                              </div>
+                              <div className="apartment-card__resident" style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '11px' }}>
+                                <span style={{ opacity: 0.6 }}>👤</span>
+                                <span title={ownerName} style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                  {ownerName}
+                                </span>
+                              </div>
+                            </div>
+                          );
+                        })}
+                    </div>
+
+                    {/* Apartment Pagination */}
+                    {aptTotalPages > 1 && (
+                      <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '15px', marginTop: '15px', padding: '10px', borderTop: '1px dashed var(--border-color)' }}>
+                        <button 
+                          type="button" 
+                          className="btn btn--sm btn--ghost" 
+                          disabled={aptPage === 0} 
+                          onClick={() => setAptPage(p => p - 1)}
+                        >
+                          {Icons.chevronLeft} Trước
+                        </button>
+                        <span style={{ fontSize: '13px', fontWeight: '600' }}>Trang {aptPage + 1} / {aptTotalPages}</span>
+                        <button 
+                          type="button" 
+                          className="btn btn--sm btn--ghost" 
+                          disabled={aptPage >= aptTotalPages - 1} 
+                          onClick={() => setAptPage(p => p + 1)}
+                        >
+                          Sau {Icons.chevronRight}
+                        </button>
+                      </div>
+                    )}
+
+                    {formErrors.apartmentId && <span className="form-error" style={{ marginTop: '8px' }}>{formErrors.apartmentId}</span>}
+                  </div>
+                )}
               </div>
 
               <div className="modal__footer">
@@ -550,6 +813,14 @@ export default function DevicesPage() {
                 <div className="detail-item">
                   <span className="detail-label">Vị trí</span>
                   <span className="detail-value">{selectedDevice.location || '—'}</span>
+                </div>
+                <div className="detail-item">
+                  <span className="detail-label">Sở hữu</span>
+                  <span className="detail-value">
+                    {selectedDevice.apartment ? (
+                      <span className="badge badge--info">{getApartmentLabel(selectedDevice.apartment)}</span>
+                    ) : 'Khu vực công cộng'}
+                  </span>
                 </div>
                 <div className="detail-item">
                   <span className="detail-label">Ngày lắp đặt</span>

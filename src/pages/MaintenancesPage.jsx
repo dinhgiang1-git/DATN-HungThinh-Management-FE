@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { toast } from 'react-toastify';
 import DatePicker, { registerLocale } from 'react-datepicker';
 import { vi } from 'date-fns/locale';
@@ -6,6 +7,8 @@ import 'react-datepicker/dist/react-datepicker.css';
 import maintenanceService from '../services/maintenanceService';
 import deviceService from '../services/deviceService';
 import userService from '../services/userService';
+import apartmentService from '../services/apartmentService';
+import { useAuth } from '../contexts/AuthContext';
 
 registerLocale('vi', vi);
 
@@ -92,6 +95,27 @@ const Icons = {
       <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z" />
     </svg>
   ),
+  calendar: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="4" width="18" height="18" rx="2" ry="2" /><line x1="16" y1="2" x2="16" y2="6" /><line x1="8" y1="2" x2="8" y2="6" /><line x1="3" y1="10" x2="21" y2="10" /></svg>
+  ),
+  dollar: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="12" y1="1" x2="12" y2="23" /><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" /></svg>
+  ),
+  users: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" /><path d="M23 21v-2a4 4 0 0 0-3-3.87" /><path d="M16 3.13a4 4 0 0 1 0 7.75" /></svg>
+  ),
+  message: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" /></svg>
+  ),
+  target: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10" /><circle cx="12" cy="12" r="6" /><circle cx="12" cy="12" r="2" /></svg>
+  ),
+  phone: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l2.18-2.18a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z" /></svg>
+  ),
+  home: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" /><polyline points="9 22 9 12 15 12 15 22" /></svg>
+  ),
 };
 
 /* ─── helpers ─── */
@@ -139,7 +163,21 @@ const formatCurrency = (val) => {
   return new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(val);
 };
 
+const getApartmentLabel = (apt) => {
+  if (!apt) return '—';
+  return `${apt.block ? `${apt.block}-` : ''}${apt.apartmentNumber || ''}${apt.floor != null ? ` (Tầng ${apt.floor})` : ''}`;
+};
+
+const getInitials = (name) => {
+  if (!name) return '??';
+  return name.split(' ').map(n => n[0]).join('').toUpperCase().substring(0, 2);
+};
+
 export default function MaintenancesPage() {
+  const location = useLocation();
+  const navigate = useNavigate();
+  const { user } = useAuth();
+  const isTechnician = user?.role === 'TECHNICIAN';
   /* ─── state ─── */
   const [maintenances, setMaintenances] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -174,15 +212,19 @@ export default function MaintenancesPage() {
     maintenanceStatus: 'SCHEDULED',
     deviceId: '',
     technicianId: [],
+    feedbackId: '',
   });
   const [formErrors, setFormErrors] = useState({});
   const [submitting, setSubmitting] = useState(false);
+  const [targetType, setTargetType] = useState('APARTMENT'); // SYSTEM | APARTMENT
 
   // Dropdown data
   const [devices, setDevices] = useState([]);
   const [technicians, setTechnicians] = useState([]);
+  const [apartments, setApartments] = useState([]);
   const [deviceSearchKeyword, setDeviceSearchKeyword] = useState('');
   const [deviceStatusFilter, setDeviceStatusFilter] = useState('');
+  const [apartmentSearchKeyword, setApartmentSearchKeyword] = useState('');
   const [techSearchKeyword, setTechSearchKeyword] = useState('');
 
   /* ─── fetch ─── */
@@ -213,12 +255,14 @@ export default function MaintenancesPage() {
 
   const fetchDropdownData = useCallback(async () => {
     try {
-      const [devRes, techRes] = await Promise.all([
+      const [devRes, techRes, aptRes] = await Promise.all([
         deviceService.getAll({ page: 0, size: 1000 }),
         userService.getAll({ page: 0, size: 1000, userRole: 'TECHNICIAN' }),
+        apartmentService.getAll({ page: 0, size: 1000 }),
       ]);
       setDevices(devRes.data?.data?.content || []);
       setTechnicians(techRes.data?.data?.content || []);
+      setApartments(aptRes.data?.data?.content || []);
     } catch (err) {
       console.error('Lỗi tải dữ liệu dropdown:', err);
     }
@@ -226,6 +270,30 @@ export default function MaintenancesPage() {
 
   useEffect(() => { fetchMaintenances(); }, [fetchMaintenances]);
   useEffect(() => { fetchDropdownData(); }, [fetchDropdownData]);
+
+  // Handle feedback link from query params
+  useEffect(() => {
+    const params = new URLSearchParams(location.search);
+    const feedbackId = params.get('feedbackId');
+    const description = params.get('description');
+    const apartmentId = params.get('apartmentId');
+    const deviceId = params.get('deviceId');
+
+    if (feedbackId) {
+      setFormData(prev => ({
+        ...prev,
+        feedbackId: feedbackId,
+        description: description || '',
+        apartmentId: apartmentId || '',
+        deviceId: deviceId || '',
+      }));
+      setTargetType(apartmentId ? 'APARTMENT' : 'SYSTEM');
+      setModalMode('create');
+      setModalOpen(true);
+      // Clear URL params
+      navigate('/maintenances', { replace: true });
+    }
+  }, [location.search, navigate]);
 
   /* ─── handlers ─── */
   const handleFilterChange = (val) => { setFilterStatus(val); setPage(0); };
@@ -242,9 +310,46 @@ export default function MaintenancesPage() {
       maintenanceStatus: 'SCHEDULED',
       deviceId: '',
       technicianId: [],
+      feedbackId: '',
+      apartmentId: '',
     });
     setFormErrors({});
+    setTargetType('APARTMENT');
     setModalOpen(true);
+  };
+
+  const handleQuickStatusUpdate = async (mId, newStatus) => {
+    try {
+      setSubmitting(true);
+      const m = maintenances.find(item => item.maintenanceId === mId);
+      if (!m) return;
+
+      const payload = {
+        maintenanceStatus: newStatus,
+        startedDate: toInputDate(m.startedDate),
+        technicianId: m.technician?.map(t => t.technicianId) || []
+      };
+
+      if (newStatus === 'COMPLETED') {
+        payload.completedDate = new Date().toISOString().substring(0, 10);
+      } else if (m.completedDate) {
+        payload.completedDate = toInputDate(m.completedDate);
+      }
+
+      if (m.device?.deviceId) payload.deviceId = Number(m.device.deviceId);
+      if (m.cost) payload.cost = Number(m.cost);
+      if (m.description) payload.description = m.description;
+
+      await maintenanceService.update(mId, payload);
+      toast.success(`Đã chuyển trạng thái sang: ${statusLabel[newStatus]}`);
+      fetchMaintenances();
+      setModalOpen(false);
+    } catch (error) {
+      console.error('Quick status update error:', error);
+      toast.error('Không thể cập nhật trạng thái nhanh');
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   const openEditModal = (m) => {
@@ -258,15 +363,45 @@ export default function MaintenancesPage() {
       maintenanceStatus: m.maintenanceStatus || 'SCHEDULED',
       deviceId: m.device?.deviceId || '',
       technicianId: m.technician ? m.technician.map(t => t.technicianId) : [],
+      feedbackId: m.feedback?.feedbackId || '',
+      apartmentId: m.apartment?.apartmentId || '',
     });
     setFormErrors({});
+    setTargetType(m.apartment ? 'APARTMENT' : 'SYSTEM');
     setModalOpen(true);
   };
 
   const openViewModal = (m) => { setModalMode('view'); setSelectedMaintenance(m); setModalOpen(true); };
 
   const handleFormChange = (field, value) => {
-    setFormData((prev) => ({ ...prev, [field]: value }));
+    setFormData((prev) => {
+      const newData = { ...prev, [field]: value };
+      
+      // Tự động cập nhật trạng thái dựa trên thời gian
+      const startStr = field === 'startedDate' ? value : prev.startedDate;
+      const endStr = field === 'completedDate' ? value : prev.completedDate;
+      
+      if (startStr && endStr) {
+        const start = new Date(startStr);
+        const end = new Date(endStr);
+        const now = new Date();
+        now.setHours(0, 0, 0, 0);
+        start.setHours(0, 0, 0, 0);
+        end.setHours(0, 0, 0, 0);
+
+        if (now >= start && now <= end) {
+          if (prev.maintenanceStatus === 'SCHEDULED' || !prev.maintenanceStatus) {
+            newData.maintenanceStatus = 'IN_PROGRESS';
+          }
+        } else if (now < start) {
+          if (prev.maintenanceStatus === 'IN_PROGRESS') {
+            newData.maintenanceStatus = 'SCHEDULED';
+          }
+        }
+      }
+      
+      return newData;
+    });
     if (formErrors[field]) setFormErrors((prev) => ({ ...prev, [field]: '' }));
   };
 
@@ -283,8 +418,17 @@ export default function MaintenancesPage() {
   const validateForm = () => {
     const errors = {};
     if (!formData.startedDate) errors.startedDate = 'Vui lòng chọn ngày bắt đầu';
-    if (!formData.deviceId) errors.deviceId = 'Vui lòng chọn thiết bị';
-    if (formData.technicianId.length === 0) errors.technicianId = 'Vui lòng chọn ít nhất 1 kỹ thuật viên';
+    
+    // Nếu là admin hoặc tạo mới thì mới yêu cầu chọn đối tượng
+    if (!isTechnician || modalMode === 'create') {
+        if (!formData.deviceId && !formData.apartmentId) {
+          errors.deviceId = 'Vui lòng chọn thiết bị hoặc căn hộ';
+        }
+        if (formData.technicianId.length === 0) {
+          errors.technicianId = 'Vui lòng chọn ít nhất 1 kỹ thuật viên';
+        }
+    }
+    
     if (formData.cost && isNaN(Number(formData.cost))) errors.cost = 'Chi phí phải là số';
     setFormErrors(errors);
     return Object.keys(errors).length === 0;
@@ -298,12 +442,14 @@ export default function MaintenancesPage() {
       const payload = {
         startedDate: formData.startedDate,
         maintenanceStatus: formData.maintenanceStatus,
-        deviceId: Number(formData.deviceId),
         technicianId: formData.technicianId,
       };
+      if (formData.deviceId) payload.deviceId = Number(formData.deviceId);
       if (formData.completedDate) payload.completedDate = formData.completedDate;
       if (formData.cost) payload.cost = Number(formData.cost);
       if (formData.description.trim()) payload.description = formData.description.trim();
+      if (formData.feedbackId) payload.feedbackId = Number(formData.feedbackId);
+      if (formData.apartmentId) payload.apartmentId = Number(formData.apartmentId);
 
       let res;
       if (modalMode === 'create') {
@@ -393,7 +539,7 @@ export default function MaintenancesPage() {
             <thead>
               <tr>
                 <th className="data-table__th--id">ID</th>
-                <th>Thiết bị</th>
+                <th>Thiết bị / Căn hộ</th>
                 <th>Ngày bắt đầu</th>
                 <th>Ngày hoàn thành</th>
                 <th>Chi phí</th>
@@ -408,7 +554,9 @@ export default function MaintenancesPage() {
                 return (
                   <tr key={m.maintenanceId}>
                     <td className="data-table__cell--id">{m.maintenanceId}</td>
-                    <td className="data-table__cell--bold">{m.device?.deviceName || '—'}</td>
+                    <td className="data-table__cell--bold">
+                      {m.device?.deviceName || getApartmentLabel(m.apartment)}
+                    </td>
                     <td>{formatDate(m.startedDate)}</td>
                     <td>{formatDate(m.completedDate)}</td>
                     <td>{formatCurrency(m.cost)}</td>
@@ -479,243 +627,238 @@ export default function MaintenancesPage() {
         </div>
       )}
 
-      {/* Create / Edit Modal */}
-      {modalOpen && (modalMode === 'create' || modalMode === 'edit') && (
+      {/* Create/Edit Modal */}
+      {modalOpen && modalMode !== 'view' && (
         <div className="modal-overlay" onClick={() => setModalOpen(false)}>
-          <div className="modal" onClick={(e) => e.stopPropagation()}>
+          <div className="modal modal--lg" style={{ maxWidth: '900px' }} onClick={(e) => e.stopPropagation()}>
             <div className="modal__header">
               <h3 className="modal__title">
-                {modalMode === 'create' ? 'Tạo lịch bảo trì' : 'Chỉnh sửa bảo trì'}
+                {modalMode === 'create' ? 'Tạo lịch bảo trì mới' : 'Chỉnh sửa thông tin bảo trì'}
               </h3>
               <button className="modal__close" onClick={() => setModalOpen(false)}>
                 {Icons.close}
               </button>
             </div>
+            
             <form onSubmit={handleSubmit} className="modal__body">
-              <div className="form-grid">
-                {/* Device */}
-                <div className="form-field form-field--full">
-                  <label className="form-label">
-                    Thiết bị <span className="form-required">*</span>
-                  </label>
-                  <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.5rem' }}>
-                    <div className="search-box" style={{ flex: 1 }}>
-                      <span className="search-box__icon">{Icons.search}</span>
+              <div className="mt-edit-grid">
+                {/* Left Section: Core Info */}
+                <div className={`mt-edit-section ${isTechnician && modalMode === 'edit' ? 'mt-edit-full' : ''}`}>
+                  <div className="mt-edit-header">
+                    <div className="mt-edit-icon">{Icons.wrench}</div>
+                    <div className="mt-edit-title">
+                      <span>Nghiệp vụ</span>
+                      <span>Thông tin sửa chữa</span>
+                    </div>
+                  </div>
+
+                  <div className="form-grid">
+                    <div className="form-field">
+                      <label className="form-label">Ngày bắt đầu <span className="form-required">*</span></label>
                       <input
-                        type="text"
-                        className="search-input"
-                        placeholder="Tìm thiết bị..."
-                        value={deviceSearchKeyword}
-                        onChange={(e) => setDeviceSearchKeyword(e.target.value)}
+                        type="date"
+                        className="form-input"
+                        value={formData.startedDate}
+                        onChange={(e) => handleFormChange('startedDate', e.target.value)}
+                      />
+                      {formErrors.startedDate && <span className="form-error">{formErrors.startedDate}</span>}
+                    </div>
+                    <div className="form-field">
+                      <label className="form-label">Ngày hoàn thành</label>
+                      <input
+                        type="date"
+                        className="form-input"
+                        value={formData.completedDate}
+                        onChange={(e) => handleFormChange('completedDate', e.target.value)}
                       />
                     </div>
-                    <select
-                      className="form-select"
-                      value={deviceStatusFilter}
-                      onChange={(e) => setDeviceStatusFilter(e.target.value)}
-                      style={{ width: 'auto', minWidth: '140px' }}
-                    >
-                      <option value="">Tất cả trạng thái</option>
-                      <option value="ACTIVE">Hoạt động</option>
-                      <option value="INACTIVE">Ngừng hoạt động</option>
-                      <option value="UNDER_MAINTENANCE">Đang bảo trì</option>
-                      <option value="BROKEN">Hỏng</option>
-                    </select>
+                    <div className="form-field">
+                      <label className="form-label">Trạng thái</label>
+                      <select
+                        className="form-input"
+                        value={formData.maintenanceStatus}
+                        onChange={(e) => handleFormChange('maintenanceStatus', e.target.value)}
+                      >
+                        {STATUSES.filter(s => s.value).map(s => (
+                          <option key={s.value} value={s.value}>{s.label}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className="form-field">
+                      <label className="form-label">Chi phí (VNĐ)</label>
+                      <input
+                        type="number"
+                        className="form-input"
+                        placeholder="VD: 500000"
+                        value={formData.cost}
+                        onChange={(e) => handleFormChange('cost', e.target.value)}
+                      />
+                    </div>
                   </div>
-                  <div className="resident-select" style={{ maxHeight: '195px' }}>
-                    {(() => {
-                      const filtered = devices.filter((d) => {
-                        if (deviceStatusFilter && d.deviceStatus !== deviceStatusFilter) return false;
-                        if (deviceSearchKeyword.trim()) {
-                          const kw = deviceSearchKeyword.trim().toLowerCase();
-                          return (d.deviceName || '').toLowerCase().includes(kw) ||
-                                 (d.location || '').toLowerCase().includes(kw);
-                        }
-                        return true;
-                      });
-                      return filtered.length === 0 ? (
-                        <p className="resident-select__empty">Không tìm thấy thiết bị nào</p>
-                      ) : (
-                        <div className="resident-select__grid">
-                          {filtered.map((d) => {
-                            const selected = String(formData.deviceId) === String(d.id);
-                            return (
-                              <label
-                                key={d.id}
-                                className={`resident-select__item ${selected ? 'resident-select__item--active' : ''}`}
-                              >
-                                <input
-                                  type="radio"
-                                  name="deviceSelect"
-                                  checked={selected}
-                                  onChange={() => handleFormChange('deviceId', d.id)}
-                                  className="resident-select__checkbox"
-                                />
-                                <div className="resident-select__info">
-                                  <span className="resident-select__name">{d.deviceName}</span>
-                                  <span className="resident-select__sub">
-                                    {d.location || '—'}
-                                    {d.deviceStatus && (
-                                      <span
-                                        className="badge"
-                                        style={{
-                                          marginLeft: '0.5rem',
-                                          fontSize: '0.7rem',
-                                          color: deviceStatusColor[d.deviceStatus]?.color || '#6b7280',
-                                          backgroundColor: deviceStatusColor[d.deviceStatus]?.bg || '#f3f4f6',
-                                        }}
-                                      >
-                                        {deviceStatusLabel[d.deviceStatus] || d.deviceStatus}
-                                      </span>
-                                    )}
-                                  </span>
+
+                  <div className="form-field" style={{ marginTop: '16px' }}>
+                    <label className="form-label">Mô tả chi tiết công việc</label>
+                    <textarea
+                      className="form-input"
+                      rows="4"
+                      placeholder="Nhập nội dung công việc bảo trì..."
+                      value={formData.description}
+                      onChange={(e) => handleFormChange('description', e.target.value)}
+                    ></textarea>
+                  </div>
+
+                  {/* Tech Selection */}
+                  {!isTechnician && (
+                    <div className="form-field" style={{ marginTop: '16px' }}>
+                      <label className="form-label">Đội ngũ kỹ thuật viên</label>
+                      <div className="search-box" style={{ marginBottom: '10px' }}>
+                        <span className="search-box__icon">{Icons.search}</span>
+                        <input
+                          type="text"
+                          className="search-input"
+                          placeholder="Tìm kiếm kỹ thuật viên..."
+                          value={techSearchKeyword}
+                          onChange={(e) => setTechSearchKeyword(e.target.value)}
+                        />
+                      </div>
+                      <div className="tech-grid-compact" style={{ maxHeight: '180px', overflowY: 'auto', padding: '2px' }}>
+                        {technicians
+                          .filter(t => !techSearchKeyword.trim() || t.fullName?.toLowerCase().includes(techSearchKeyword.toLowerCase()))
+                          .map(t => (
+                            <div 
+                              key={t.id} 
+                              className={`tech-item-compact ${formData.technicianId.includes(t.id) ? 'tech-item-compact--active' : ''}`}
+                              onClick={() => handleTechnicianToggle(t.id)}
+                            >
+                              <div className="tech-avatar-sm">{getInitials(t.fullName || t.username)}</div>
+                              <span className="tech-name-sm">{t.fullName || t.username}</span>
+                            </div>
+                          ))}
+                      </div>
+                      {formErrors.technicianId && <span className="form-error">{formErrors.technicianId}</span>}
+                    </div>
+                  )}
+                </div>
+
+                {/* Right Section: Target Selection (Admin only during edit) */}
+                {(!isTechnician || modalMode === 'create') && (
+                  <div className="mt-edit-section">
+                    <div className="mt-edit-header">
+                      <div className="mt-edit-icon" style={{ background: '#fef3c7', color: '#d97706' }}>{Icons.target}</div>
+                      <div className="mt-edit-title">
+                        <span>Đối tượng</span>
+                        <span>Địa điểm & Thiết bị</span>
+                      </div>
+                    </div>
+
+                    <div className="mt-target-tabs">
+                      <button 
+                        type="button"
+                        className={`mt-target-tab ${targetType === 'APARTMENT' ? 'mt-target-tab--active' : ''}`}
+                        onClick={() => { setTargetType('APARTMENT'); handleFormChange('deviceId', ''); }}
+                      >
+                        🏠 Căn hộ
+                      </button>
+                      <button 
+                        type="button"
+                        className={`mt-target-tab ${targetType === 'SYSTEM' ? 'mt-target-tab--active' : ''}`}
+                        onClick={() => { setTargetType('SYSTEM'); handleFormChange('apartmentId', ''); handleFormChange('deviceId', ''); }}
+                      >
+                        🏢 Hệ thống
+                      </button>
+                    </div>
+
+                    <div style={{ marginTop: '16px' }}>
+                      {targetType === 'APARTMENT' ? (
+                        <>
+                          <div className="form-field">
+                            <label className="form-label">Chọn Căn hộ</label>
+                            <div className="search-box" style={{ marginBottom: '8px' }}>
+                              <input
+                                type="text"
+                                className="search-input"
+                                placeholder="Tìm căn hộ..."
+                                value={apartmentSearchKeyword}
+                                onChange={(e) => setApartmentSearchKeyword(e.target.value)}
+                              />
+                            </div>
+                            <div className="resident-select" style={{ maxHeight: '120px' }}>
+                              <div className="resident-select__grid">
+                                {apartments
+                                  .filter(a => !apartmentSearchKeyword.trim() || getApartmentLabel(a).toLowerCase().includes(apartmentSearchKeyword.toLowerCase()))
+                                  .map(a => (
+                                    <label key={a.id} className={`resident-select__item ${String(formData.apartmentId) === String(a.id) ? 'resident-select__item--active' : ''}`}>
+                                      <input 
+                                        type="radio" 
+                                        name="apt" 
+                                        checked={String(formData.apartmentId) === String(a.id)} 
+                                        onChange={() => { handleFormChange('apartmentId', a.id); handleFormChange('deviceId', ''); }}
+                                      />
+                                      <div className="resident-select__info">
+                                        <span className="resident-select__name">{getApartmentLabel(a)}</span>
+                                      </div>
+                                    </label>
+                                  ))}
+                              </div>
+                            </div>
+                          </div>
+
+                          <div className="form-field" style={{ marginTop: '10px' }}>
+                            <label className="form-label">Chọn Thiết bị (Nếu có)</label>
+                            <div className="resident-select" style={{ maxHeight: '120px' }}>
+                              {!formData.apartmentId ? (
+                                <p className="resident-select__empty">Vui lòng chọn căn hộ trước</p>
+                              ) : (
+                                <div className="resident-select__grid">
+                                  {devices
+                                    .filter(d => String(d.apartment?.id) === String(formData.apartmentId))
+                                    .map(d => (
+                                      <label key={d.id} className={`resident-select__item ${String(formData.deviceId) === String(d.id) ? 'resident-select__item--active' : ''}`}>
+                                        <input type="radio" name="dev" checked={String(formData.deviceId) === String(d.id)} onChange={() => handleFormChange('deviceId', d.id)} />
+                                        <div className="resident-select__info"><span className="resident-select__name">{d.deviceName}</span></div>
+                                      </label>
+                                    ))}
                                 </div>
-                              </label>
-                            );
-                          })}
-                        </div>
-                      );
-                    })()}
-                  </div>
-                  {formErrors.deviceId && <span className="form-error">{formErrors.deviceId}</span>}
-                </div>
-
-                {/* Started date */}
-                <div className="form-field">
-                  <label className="form-label">
-                    Ngày bắt đầu <span className="form-required">*</span>
-                  </label>
-                  <DatePicker
-                    selected={formData.startedDate ? new Date(formData.startedDate) : null}
-                    onChange={(date) => handleFormChange('startedDate', date ? date.toISOString().substring(0, 10) : '')}
-                    dateFormat="dd/MM/yyyy"
-                    locale="vi"
-                    placeholderText="dd/MM/yyyy"
-                    className={`form-input ${formErrors.startedDate ? 'form-input--error' : ''}`}
-                    isClearable
-                  />
-                  {formErrors.startedDate && <span className="form-error">{formErrors.startedDate}</span>}
-                </div>
-
-                {/* Completed date */}
-                <div className="form-field">
-                  <label className="form-label">Ngày hoàn thành</label>
-                  <DatePicker
-                    selected={formData.completedDate ? new Date(formData.completedDate) : null}
-                    onChange={(date) => handleFormChange('completedDate', date ? date.toISOString().substring(0, 10) : '')}
-                    dateFormat="dd/MM/yyyy"
-                    locale="vi"
-                    placeholderText="dd/MM/yyyy"
-                    className="form-input"
-                    isClearable
-                  />
-                </div>
-
-                {/* Cost */}
-                <div className="form-field">
-                  <label className="form-label">Chi phí (VNĐ)</label>
-                  <input
-                    type="text"
-                    className={`form-input ${formErrors.cost ? 'form-input--error' : ''}`}
-                    value={formData.cost ? Number(formData.cost).toLocaleString('vi-VN') : ''}
-                    onChange={(e) => {
-                      const raw = e.target.value.replace(/\D/g, '');
-                      handleFormChange('cost', raw);
-                    }}
-                    placeholder="VD: 500.000"
-                  />
-                  {formErrors.cost && <span className="form-error">{formErrors.cost}</span>}
-                </div>
-
-                {/* Status */}
-                <div className="form-field">
-                  <label className="form-label">Trạng thái</label>
-                  <select
-                    className="form-select"
-                    value={formData.maintenanceStatus}
-                    onChange={(e) => handleFormChange('maintenanceStatus', e.target.value)}
-                  >
-                    <option value="SCHEDULED">Đã lên lịch</option>
-                    <option value="IN_PROGRESS">Đang thực hiện</option>
-                    <option value="COMPLETED">Hoàn thành</option>
-                    <option value="CANCELLED">Đã hủy</option>
-                  </select>
-                </div>
-
-                {/* Description */}
-                <div className="form-field form-field--full">
-                  <label className="form-label">Mô tả</label>
-                  <textarea
-                    className="form-input form-textarea"
-                    value={formData.description}
-                    onChange={(e) => handleFormChange('description', e.target.value)}
-                    placeholder="Mô tả công việc bảo trì..."
-                    rows={3}
-                  />
-                </div>
-
-                {/* Technician selection */}
-                <div className="form-field form-field--full">
-                  <label className="form-label">
-                    Kỹ thuật viên <span className="form-required">*</span>
-                  </label>
-                  <div className="search-box" style={{ marginBottom: '0.5rem' }}>
-                    <span className="search-box__icon">{Icons.search}</span>
-                    <input
-                      type="text"
-                      className="search-input"
-                      placeholder="Tìm kỹ thuật viên..."
-                      value={techSearchKeyword}
-                      onChange={(e) => setTechSearchKeyword(e.target.value)}
-                    />
-                  </div>
-                  <div className="resident-select" style={{ maxHeight: '195px' }}>
-                    {(() => {
-                      const filtered = technicians.filter((t) =>
-                        !techSearchKeyword.trim() ||
-                        (t.fullName || '').toLowerCase().includes(techSearchKeyword.trim().toLowerCase()) ||
-                        (t.phoneNumber || '').includes(techSearchKeyword.trim())
-                      );
-                      return filtered.length === 0 ? (
-                        <p className="resident-select__empty">Không tìm thấy kỹ thuật viên nào</p>
+                              )}
+                            </div>
+                          </div>
+                        </>
                       ) : (
-                        <div className="resident-select__grid">
-                          {filtered.map((t) => {
-                            const checked = formData.technicianId.includes(t.id);
-                            return (
-                              <label
-                                key={t.id}
-                                className={`resident-select__item ${checked ? 'resident-select__item--active' : ''}`}
-                              >
-                                <input
-                                  type="checkbox"
-                                  checked={checked}
-                                  onChange={() => handleTechnicianToggle(t.id)}
-                                  className="resident-select__checkbox"
-                                />
-                                <div className="resident-select__info">
-                                  <span className="resident-select__name">{t.fullName || t.username}</span>
-                                  <span className="resident-select__sub">
-                                    {t.phoneNumber || t.email || 'Kỹ thuật viên'}
-                                  </span>
-                                </div>
-                              </label>
-                            );
-                          })}
+                        <div className="form-field">
+                          <label className="form-label">Thiết bị hệ thống</label>
+                          <div className="search-box" style={{ marginBottom: '8px' }}>
+                            <input
+                              type="text"
+                              className="search-input"
+                              placeholder="Tìm thiết bị chung..."
+                              value={deviceSearchKeyword}
+                              onChange={(e) => setDeviceSearchKeyword(e.target.value)}
+                            />
+                          </div>
+                          <div className="resident-select" style={{ maxHeight: '300px' }}>
+                            <div className="resident-select__grid">
+                              {devices
+                                .filter(d => d.deviceType === 'COMMON' && (!deviceSearchKeyword.trim() || d.deviceName?.toLowerCase().includes(deviceSearchKeyword.toLowerCase())))
+                                .map(d => (
+                                  <label key={d.id} className={`resident-select__item ${String(formData.deviceId) === String(d.id) ? 'resident-select__item--active' : ''}`}>
+                                    <input type="radio" name="sys-dev" checked={String(formData.deviceId) === String(d.id)} onChange={() => handleFormChange('deviceId', d.id)} />
+                                    <div className="resident-select__info"><span className="resident-select__name">{d.deviceName}</span></div>
+                                  </label>
+                                ))}
+                            </div>
+                          </div>
                         </div>
-                      );
-                    })()}
+                      )}
+                      {(formErrors.deviceId || formErrors.apartmentId) && <span className="form-error">Vui lòng chọn đối tượng cụ thể</span>}
+                    </div>
                   </div>
-                  {formErrors.technicianId && <span className="form-error">{formErrors.technicianId}</span>}
-                </div>
+                )}
               </div>
 
-              <div className="modal__footer">
-                <button type="button" className="btn btn--ghost" onClick={() => setModalOpen(false)}>
-                  Hủy
-                </button>
+              <div className="modal__footer" style={{ borderTop: 'none', paddingTop: '0' }}>
+                <button type="button" className="btn btn--ghost" onClick={() => setModalOpen(false)}>Hủy bỏ</button>
                 <button type="submit" className="btn btn--primary" disabled={submitting}>
-                  {submitting ? 'Đang xử lý...' : modalMode === 'create' ? 'Tạo bảo trì' : 'Cập nhật'}
+                  {submitting ? 'Đang lưu...' : (modalMode === 'create' ? 'Tạo lịch ngay' : 'Lưu thay đổi')}
                 </button>
               </div>
             </form>
@@ -723,90 +866,146 @@ export default function MaintenancesPage() {
         </div>
       )}
 
+
       {/* View Modal */}
       {modalOpen && modalMode === 'view' && selectedMaintenance && (
         <div className="modal-overlay" onClick={() => setModalOpen(false)}>
-          <div className="modal" onClick={(e) => e.stopPropagation()}>
+          <div className="modal modal--lg" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '800px' }}>
             <div className="modal__header">
-              <h3 className="modal__title">Chi tiết bảo trì</h3>
-              <button className="modal__close" onClick={() => setModalOpen(false)}>
-                {Icons.close}
-              </button>
+              <h3 className="modal__title">Chi tiết lịch bảo trì #{selectedMaintenance.maintenanceId}</h3>
+              <button className="modal__close" onClick={() => setModalOpen(false)}>{Icons.close}</button>
             </div>
-            <div className="modal__body">
-              <div className="detail-list">
-                <div className="detail-item">
-                  <span className="detail-label">ID</span>
-                  <span className="detail-value">{selectedMaintenance.maintenanceId}</span>
-                </div>
-                <div className="detail-item">
-                  <span className="detail-label">Thiết bị</span>
-                  <span className="detail-value detail-value--bold">{selectedMaintenance.device?.deviceName || '—'}</span>
-                </div>
-                <div className="detail-item">
-                  <span className="detail-label">Trạng thái</span>
-                  <span className="detail-value">
-                    <span
-                      className="badge"
-                      style={{
-                        color: statusColor[selectedMaintenance.maintenanceStatus]?.color || '#6b7280',
-                        backgroundColor: statusColor[selectedMaintenance.maintenanceStatus]?.bg || '#f3f4f6',
-                      }}
-                    >
-                      {statusLabel[selectedMaintenance.maintenanceStatus] || selectedMaintenance.maintenanceStatus}
-                    </span>
+            <div className="modal__body mt-view">
+              {/* Header Info */}
+              <div className="mt-view__header">
+                <div className="mt-view__target">
+                  <span className="mt-view__target-label">Đối tượng bảo trì</span>
+                  <span className="mt-view__target-value">
+                    {selectedMaintenance.device?.deviceName || getApartmentLabel(selectedMaintenance.apartment)}
                   </span>
                 </div>
-                <div className="detail-item">
-                  <span className="detail-label">Ngày bắt đầu</span>
-                  <span className="detail-value">{formatDate(selectedMaintenance.startedDate)}</span>
-                </div>
-                <div className="detail-item">
-                  <span className="detail-label">Ngày hoàn thành</span>
-                  <span className="detail-value">{formatDate(selectedMaintenance.completedDate)}</span>
-                </div>
-                <div className="detail-item">
-                  <span className="detail-label">Chi phí</span>
-                  <span className="detail-value">{formatCurrency(selectedMaintenance.cost)}</span>
-                </div>
-                <div className="detail-item detail-item--full">
-                  <span className="detail-label">Mô tả</span>
-                  <span className="detail-value" style={{ whiteSpace: 'pre-wrap' }}>
-                    {selectedMaintenance.description || <em style={{ color: 'var(--text-light, #94a3b8)' }}>Không có mô tả</em>}
-                  </span>
-                </div>
-                <div className="detail-item detail-item--full">
-                  <span className="detail-label">Kỹ thuật viên</span>
-                  <span className="detail-value">
-                    {selectedMaintenance.technician && selectedMaintenance.technician.length > 0 ? (
-                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>
-                        {selectedMaintenance.technician.map((t) => (
-                          <span
-                            key={t.technicianId}
-                            className="badge"
-                            style={{ color: '#7c3aed', backgroundColor: '#ede9fe' }}
-                          >
-                            {t.technicianName}
-                          </span>
-                        ))}
-                      </div>
-                    ) : '—'}
+                <div style={{ textAlign: 'right' }}>
+                  <span
+                    className="badge"
+                    style={{
+                      padding: '6px 16px',
+                      borderRadius: '30px',
+                      fontSize: '13px',
+                      fontWeight: 700,
+                      color: statusColor[selectedMaintenance.maintenanceStatus]?.color || '#6b7280',
+                      backgroundColor: statusColor[selectedMaintenance.maintenanceStatus]?.bg || '#f3f4f6',
+                    }}
+                  >
+                    {statusLabel[selectedMaintenance.maintenanceStatus] || selectedMaintenance.maintenanceStatus}
                   </span>
                 </div>
               </div>
+
+              {/* Grid Info */}
+              <div className="mt-view__grid">
+                <div className="mt-meta-card">
+                  <div className="mt-meta-card__icon">{Icons.calendar}</div>
+                  <div className="mt-meta-card__content">
+                    <span className="mt-meta-card__label">Ngày bắt đầu</span>
+                    <span className="mt-meta-card__value">{formatDate(selectedMaintenance.startedDate)}</span>
+                  </div>
+                </div>
+                <div className="mt-meta-card">
+                  <div className="mt-meta-card__icon">{Icons.calendar}</div>
+                  <div className="mt-meta-card__content">
+                    <span className="mt-meta-card__label">Ngày hoàn thành</span>
+                    <span className="mt-meta-card__value">{formatDate(selectedMaintenance.completedDate)}</span>
+                  </div>
+                </div>
+                <div className="mt-meta-card">
+                  <div className="mt-meta-card__icon">{Icons.dollar}</div>
+                  <div className="mt-meta-card__content">
+                    <span className="mt-meta-card__label">Chi phí dự kiến</span>
+                    <span className="mt-meta-card__value">{formatCurrency(selectedMaintenance.cost)}</span>
+                  </div>
+                </div>
+                <div className="mt-meta-card">
+                  <div className="mt-meta-card__icon">{Icons.users}</div>
+                  <div className="mt-meta-card__content">
+                    <span className="mt-meta-card__label">Kỹ thuật viên</span>
+                    <span className="mt-meta-card__value" style={{ fontSize: '0.85rem' }}>
+                      {selectedMaintenance.technician?.map(t => t.technicianName).join(', ') || '—'}
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Feedback Section (if exists) */}
+              {selectedMaintenance.feedback && (
+                <div className="mt-view__feedback">
+                  <div className="mt-view__feedback-header">{Icons.message} Thông tin từ phản ánh cư dân</div>
+                  <div className="mt-view__feedback-bubble">
+                    <div className="mt-view__feedback-title">{selectedMaintenance.feedback.title}</div>
+                    <div className="mt-view__feedback-text">{selectedMaintenance.feedback.content}</div>
+                    
+                    <div className="mt-view__feedback-contact">
+                      <div className="mt-view__contact-item">
+                        <span style={{ color: '#3b82f6' }}>{Icons.user}</span>
+                        <span>Người gửi:</span>
+                        <span>{selectedMaintenance.feedback.senderName}</span>
+                      </div>
+                      <div className="mt-view__contact-item">
+                        <span style={{ color: '#10b981' }}>{Icons.phone}</span>
+                        <span>SĐT:</span>
+                        <span>{selectedMaintenance.feedback.phoneNumber}</span>
+                      </div>
+                      <div className="mt-view__contact-item">
+                        <span style={{ color: '#f59e0b' }}>{Icons.home}</span>
+                        <span>Căn hộ:</span>
+                        <span>{selectedMaintenance.feedback.apartmentName}</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
             <div className="modal__footer">
-              <button className="btn btn--ghost" onClick={() => setModalOpen(false)}>
-                Đóng
-              </button>
+              <button className="btn btn--ghost" onClick={() => setModalOpen(false)}>Đóng</button>
+              
+              {/* Quick Action Buttons for Technician/Admin */}
+              {selectedMaintenance.maintenanceStatus === 'SCHEDULED' && (
+                <button 
+                  className="btn btn--primary" 
+                  style={{ background: '#3b82f6' }}
+                  onClick={() => handleQuickStatusUpdate(selectedMaintenance.maintenanceId, 'IN_PROGRESS')}
+                  disabled={submitting}
+                >
+                  ⚡ Bắt đầu thực hiện
+                </button>
+              )}
+              
+              {selectedMaintenance.maintenanceStatus === 'IN_PROGRESS' && (
+                <button 
+                  className="btn btn--success" 
+                  style={{ background: '#10b981', color: 'white' }}
+                  onClick={() => handleQuickStatusUpdate(selectedMaintenance.maintenanceId, 'COMPLETED')}
+                  disabled={submitting}
+                >
+                  ✅ Hoàn thành bảo trì
+                </button>
+              )}
+
+              {selectedMaintenance.maintenanceStatus === 'COMPLETED' && isTechnician && (
+                <div style={{ color: '#10b981', display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.9rem', fontWeight: 600 }}>
+                  {Icons.check} Công việc đã hoàn tất
+                </div>
+              )}
+
+              {/* Keep edit button as secondary option */}
               <button
-                className="btn btn--primary"
+                className="btn btn--ghost"
+                style={{ border: '1px solid #e2e8f0' }}
                 onClick={() => {
                   setModalOpen(false);
                   setTimeout(() => openEditModal(selectedMaintenance), 100);
                 }}
               >
-                Chỉnh sửa
+                Chỉnh sửa chi tiết
               </button>
             </div>
           </div>

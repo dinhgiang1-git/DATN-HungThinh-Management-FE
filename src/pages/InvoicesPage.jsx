@@ -11,6 +11,7 @@ import tableElectricTierService from '../services/tableElectricTierService';
 import paymentService from '../services/paymentService';
 import evnService from '../services/evnService';
 import waterService from '../services/waterService';
+import vehicleService from '../services/vehicleService';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import SearchableSelect from '../components/common/SearchableSelect';
@@ -172,6 +173,7 @@ export default function InvoicesPage() {
   const [isCalculatingElectric, setIsCalculatingElectric] = useState(false);
   const [evnMockInfo, setEvnMockInfo] = useState({ loading: false, data: null, error: null });
   const [waterMockInfo, setWaterMockInfo] = useState({ loading: false, data: null, error: null });
+  const [parkingFeeInfo, setParkingFeeInfo] = useState({ loading: false, vehicles: null, error: null });
   const [formErrors, setFormErrors] = useState({});
   const [submitting, setSubmitting] = useState(false);
 
@@ -205,7 +207,7 @@ export default function InvoicesPage() {
   const [tableFeeEditOpen, setTableFeeEditOpen] = useState(false);
   const [editingFee, setEditingFee] = useState(null);
   const [tableFeeForm, setTableFeeForm] = useState({
-    title: '', electricFee: '', waterFee: '', managementFee: '', parkingFee: '', otherFee: '', descriptionOtherFee: '',
+    title: '', electricFee: '', waterFee: '', managementFee: '', motorbikeParkingFee: '', carParkingFee: '', bicycleParkingFee: '', electricMotorbikeParkingFee: '', otherFee: '', descriptionOtherFee: '',
   });
   const [tableFeeSubmitting, setTableFeeSubmitting] = useState(false);
   const [selectedFeeIndex, setSelectedFeeIndex] = useState(0); // index của bảng phí được chọn
@@ -406,12 +408,63 @@ export default function InvoicesPage() {
       setFormData((prev) => ({
         ...prev,
         managementFee: activeFee.managementFee ? String(activeFee.managementFee) : '',
-        parkingFee: activeFee.parkingFee ? String(activeFee.parkingFee) : '',
         otherFee: activeFee.otherFee ? String(activeFee.otherFee) : '0',
         descriptionOtherFee: activeFee.descriptionOtherFee || '',
       }));
     }
   }, [selectedFeeIndex, modalOpen, activeFee]);
+
+  /* ─── auto-calculate parking fee from vehicle counts ─── */
+  useEffect(() => {
+    if (!modalOpen || !formData.apartmentId || !activeFee) {
+      setParkingFeeInfo({ loading: false, vehicles: null, error: null });
+      return;
+    }
+
+    const motorbikeFee = activeFee.motorbikeParkingFee || 0;
+    const carFee = activeFee.carParkingFee || 0;
+    const bicycleFee = activeFee.bicycleParkingFee || 0;
+    const electricMotorbikeFee = activeFee.electricMotorbikeParkingFee || 0;
+
+    // If all fees are 0, skip calculation
+    if (motorbikeFee === 0 && carFee === 0 && bicycleFee === 0 && electricMotorbikeFee === 0) {
+      setFormData(prev => ({ ...prev, parkingFee: '0' }));
+      setParkingFeeInfo({ loading: false, vehicles: null, error: 'Bảng phí chưa cấu hình phí gửi xe' });
+      return;
+    }
+
+    setParkingFeeInfo({ loading: true, vehicles: null, error: null });
+
+    // Fetch vehicles for the apartment to show breakdown
+    const apartmentId = Number(formData.apartmentId);
+    Promise.all([
+      vehicleService.calculateParkingFee(apartmentId, motorbikeFee, carFee, bicycleFee, electricMotorbikeFee),
+      vehicleService.getByApartment(apartmentId),
+    ])
+      .then(([feeRes, vehRes]) => {
+        const totalFee = feeRes.data?.data;
+        const vehicles = vehRes.data?.data || [];
+
+        // Count by type
+        const counts = {
+          MOTORBIKE: vehicles.filter(v => v.vehicleType === 'MOTORBIKE').length,
+          CAR: vehicles.filter(v => v.vehicleType === 'CAR').length,
+          BICYCLE: vehicles.filter(v => v.vehicleType === 'BICYCLE').length,
+          ELECTRIC_BIKE: vehicles.filter(v => v.vehicleType === 'ELECTRIC_BIKE' || v.vehicleType === 'ELECTRIC_MOTORBIKE').length,
+        };
+
+        setFormData(prev => ({ ...prev, parkingFee: totalFee != null ? String(totalFee) : '0' }));
+        setParkingFeeInfo({
+          loading: false,
+          vehicles: { counts, rates: { motorbikeFee, carFee, bicycleFee, electricMotorbikeFee } },
+          error: null,
+        });
+      })
+      .catch(err => {
+        console.error('Lỗi tính phí gửi xe:', err);
+        setParkingFeeInfo({ loading: false, vehicles: null, error: 'Không thể tính phí gửi xe' });
+      });
+  }, [modalOpen, formData.apartmentId, activeFee, selectedFeeIndex]);
 
   /* ─── handlers ─── */
   const handleFilterChange = (val) => { setFilterStatus(val); setPage(0); };
@@ -611,9 +664,9 @@ export default function InvoicesPage() {
         };
       }
       // Fee fields - Lấy trực tiếp kết quả tổng tiền từ form (đã được tính toán khi nhập quantity)
-      // Electric
+      // Electric (bao gồm 8% thuế GTGT)
       if (formData.electricFee) {
-        payload.electricFee = Number(formData.electricFee);
+        payload.electricFee = Math.round(Number(formData.electricFee) * 1.08);
       }
 
       // Water
@@ -818,6 +871,39 @@ export default function InvoicesPage() {
     }
   };
 
+  const handleConfirmCashPayment = async (paymentId) => {
+    if (!paymentId) return;
+    setPaySubmitting(true);
+    try {
+      await paymentService.confirmCashPayment(paymentId);
+      toast.success('Đã xác nhận thanh toán tiền mặt!');
+      fetchInvoices();
+      if (selectedInvoice?.invoiceId) {
+        const res = await invoiceService.getById(selectedInvoice.invoiceId);
+        setSelectedInvoice(res.data?.data);
+      }
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Không thể xác nhận thanh toán tiền mặt');
+    } finally {
+      setPaySubmitting(false);
+    }
+  };
+
+  const getPendingCashPayment = (invoice) =>
+    invoice?.payments?.find((p) => p.paymentMethod === 'CASH' && p.paymentStatus === 'PENDING');
+
+  const getSuccessfulPaidAmount = (invoice) =>
+    invoice?.payments
+      ?.filter((p) => p.paymentStatus === 'SUCCESS')
+      .reduce((sum, p) => sum + (Number(p.amount) || 0), 0) || 0;
+
+  const getPaymentSummaryStatus = (invoice) => {
+    if (invoice?.invoiceStatus === 'PAID') return { label: 'Đã hoàn tất', color: '#047857', bg: '#d1fae5' };
+    if (getPendingCashPayment(invoice)) return { label: 'Chờ xác nhận tiền mặt', color: '#92400e', bg: '#fef3c7' };
+    if (invoice?.invoiceStatus === 'OVERDUE') return { label: 'Quá hạn', color: '#c2410c', bg: '#ffedd5' };
+    return { label: 'Chưa thanh toán', color: '#dc2626', bg: '#fee2e2' };
+  };
+
   const getApartmentLabel = (apt) => {
     if (!apt) return '—';
     return `${apt.block ? `${apt.block}-` : ''}${apt.apartmentNumber || ''}${apt.floor != null ? ` (Tầng ${apt.floor})` : ''}`;
@@ -831,7 +917,10 @@ export default function InvoicesPage() {
       electricFee: fee?.electricFee != null ? String(fee.electricFee) : '',
       waterFee: fee?.waterFee != null ? String(fee.waterFee) : '',
       managementFee: fee?.managementFee != null ? String(fee.managementFee) : '',
-      parkingFee: fee?.parkingFee != null ? String(fee.parkingFee) : '',
+      motorbikeParkingFee: fee?.motorbikeParkingFee != null ? String(fee.motorbikeParkingFee) : '',
+      carParkingFee: fee?.carParkingFee != null ? String(fee.carParkingFee) : '',
+      bicycleParkingFee: fee?.bicycleParkingFee != null ? String(fee.bicycleParkingFee) : '',
+      electricMotorbikeParkingFee: fee?.electricMotorbikeParkingFee != null ? String(fee.electricMotorbikeParkingFee) : '',
       otherFee: fee?.otherFee != null ? String(fee.otherFee) : '',
       descriptionOtherFee: fee?.descriptionOtherFee || '',
     });
@@ -852,7 +941,10 @@ export default function InvoicesPage() {
         electricFee: useTieredElectric ? 0 : (Number(tableFeeForm.electricFee) || 0),
         waterFee: Number(tableFeeForm.waterFee) || 0,
         managementFee: Number(tableFeeForm.managementFee) || 0,
-        parkingFee: Number(tableFeeForm.parkingFee) || 0,
+        motorbikeParkingFee: Number(tableFeeForm.motorbikeParkingFee) || 0,
+        carParkingFee: Number(tableFeeForm.carParkingFee) || 0,
+        bicycleParkingFee: Number(tableFeeForm.bicycleParkingFee) || 0,
+        electricMotorbikeParkingFee: Number(tableFeeForm.electricMotorbikeParkingFee) || 0,
         otherFee: Number(tableFeeForm.otherFee) || 0,
         descriptionOtherFee: tableFeeForm.descriptionOtherFee?.trim() || '',
         useTieredElectric: useTieredElectric,
@@ -924,7 +1016,7 @@ export default function InvoicesPage() {
   /* ─── Fee table data rows ─── */
   const feeTableRows = activeFee ? [
     { label: 'Phí quản lý căn hộ', sub: 'Phí duy trì hoạt động chung cư', value: activeFee.managementFee, unit: 'tháng' },
-    { label: 'Phí gửi xe', sub: 'Ô tô, xe máy, xe đạp', value: activeFee.parkingFee, unit: 'tháng' },
+    { label: 'Phí gửi xe', sub: 'Ô tô, xe máy, xe đạp', value: 'Tùy loại xe', unit: '' },
     { label: 'Điện', sub: 'Tiêu thụ điện năng', value: activeFee.electricFee, unit: 'kWh', isTiered: activeFee.useTieredElectric },
     { label: 'Nước', sub: 'Tiêu thụ nước', value: activeFee.waterFee, unit: 'm³' },
     { label: 'Phí khác', sub: 'Các phí phát sinh khác', value: activeFee.otherFee, unit: 'tháng' },
@@ -1194,6 +1286,7 @@ export default function InvoicesPage() {
             <tbody>
               {invoices.map((inv) => {
                 const sc = statusColor[inv.invoiceStatus] || { color: '#6b7280', bg: '#f3f4f6' };
+                const pendingCashPayment = getPendingCashPayment(inv);
                 return (
                   <tr key={inv.invoiceId}>
                     <td className="data-table__cell--id">{inv.invoiceId}</td>
@@ -1205,6 +1298,13 @@ export default function InvoicesPage() {
                       <span className="badge" style={{ color: sc.color, backgroundColor: sc.bg }}>
                         {statusLabel[inv.invoiceStatus] || inv.invoiceStatus}
                       </span>
+                      {pendingCashPayment && (
+                        <div style={{ marginTop: 6 }}>
+                          <span className="badge" style={{ color: '#92400e', backgroundColor: '#fef3c7' }}>
+                            Chờ xác nhận tiền mặt
+                          </span>
+                        </div>
+                      )}
                     </td>
                     <td>
                       <div className="action-btns">
@@ -1224,6 +1324,17 @@ export default function InvoicesPage() {
                             title="Đã thanh toán"
                             disabled
                             style={{ color: '#a3e635', background: '#f0fdf4', opacity: 0.5, cursor: 'default' }}
+                          >
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" style={{ width: 16, height: 16 }}><polyline points="20 6 9 17 4 12" /></svg>
+                          </button>
+                        )}
+                        {pendingCashPayment && (
+                          <button
+                            className="action-btn"
+                            title="Xác nhận thanh toán tiền mặt"
+                            disabled={paySubmitting}
+                            onClick={() => handleConfirmCashPayment(pendingCashPayment.paymentId)}
+                            style={{ color: '#16a34a', background: '#dcfce7' }}
                           >
                             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" style={{ width: 16, height: 16 }}><polyline points="20 6 9 17 4 12" /></svg>
                           </button>
@@ -1474,9 +1585,9 @@ export default function InvoicesPage() {
                             <input type="text" className="form-input" value={formatInputCurrency(formData.electricQuantity)} onChange={(e) => handleFormChange('electricQuantity', parseInputCurrency(e.target.value))} placeholder="Nhập số điện..." readOnly={!!(!evnMockInfo.loading && evnMockInfo.data)} style={{ background: (!evnMockInfo.loading && evnMockInfo.data) ? '#f1f5f9' : '#fff' }} />
                           </div>
                           <div className="form-field" style={{ marginBottom: 0 }}>
-                            <label className="form-label" style={{ fontSize: '0.8rem', color: '#047857' }}>Tổng tiền điện</label>
+                            <label className="form-label" style={{ fontSize: '0.8rem', color: '#64748b' }}>Tiền điện chưa thuế</label>
                             <div style={{ position: 'relative' }}>
-                              <input type="text" className="form-input" value={formatInputCurrency(formData.electricFee)} readOnly placeholder="Tự động tính..." style={{ background: '#d1fae5', color: '#047857', cursor: 'default', fontWeight: 600 }} />
+                              <input type="text" className="form-input" value={formatInputCurrency(formData.electricFee)} readOnly placeholder="Tự động tính..." style={{ background: '#f1f5f9', color: '#64748b', cursor: 'default', fontWeight: 600 }} />
                               {isCalculatingElectric && (
                                 <div style={{ position: 'absolute', right: 12, top: '50%', transform: 'translateY(-50%)' }}>
                                   <div className="spinner" style={{ width: 16, height: 16, margin: 0 }} />
@@ -1485,6 +1596,18 @@ export default function InvoicesPage() {
                             </div>
                           </div>
                         </div>
+                        {Number(formData.electricFee) > 0 && (
+                          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginTop: '0.75rem', alignItems: 'end' }}>
+                            <div className="form-field" style={{ marginBottom: 0 }}>
+                              <label className="form-label" style={{ fontSize: '0.8rem', color: '#d97706' }}>Thuế GTGT (8%)</label>
+                              <input type="text" className="form-input" value={formatInputCurrency(Math.round(Number(formData.electricFee) * 0.08))} readOnly style={{ background: '#fefce8', color: '#d97706', cursor: 'default', fontWeight: 600 }} />
+                            </div>
+                            <div className="form-field" style={{ marginBottom: 0 }}>
+                              <label className="form-label" style={{ fontSize: '0.8rem', color: '#047857' }}>Tổng tiền điện</label>
+                              <input type="text" className="form-input" value={formatInputCurrency(Math.round(Number(formData.electricFee) * 1.08))} readOnly style={{ background: '#d1fae5', color: '#047857', cursor: 'default', fontWeight: 600 }} />
+                            </div>
+                          </div>
+                        )}
                         {modalMode === 'create' && activeFee?.useTieredElectric && formData.apartmentId && (
                           <div style={{ fontSize: '0.75rem', fontWeight: 500 }}>
                             {evnMockInfo.loading && <span style={{ color: '#d97706' }}>⏳ Đang kết nối EVN...</span>}
@@ -1505,10 +1628,22 @@ export default function InvoicesPage() {
                             <input type="text" className="form-input" value={formatInputCurrency(formData.electricQuantity)} onChange={(e) => handleFormChange('electricQuantity', parseInputCurrency(e.target.value))} placeholder="Nhập số điện..." />
                           </div>
                           <div className="form-field" style={{ marginBottom: 0 }}>
-                            <label className="form-label" style={{ color: '#047857' }}>Tổng tiền điện</label>
-                            <input type="text" className="form-input" value={formatInputCurrency(formData.electricFee)} readOnly placeholder="Tự động tính" style={{ background: '#d1fae5', color: '#047857', cursor: 'default', fontWeight: 600 }} />
+                            <label className="form-label" style={{ color: '#64748b' }}>Tiền điện chưa thuế</label>
+                            <input type="text" className="form-input" value={formatInputCurrency(formData.electricFee)} readOnly placeholder="Tự động tính" style={{ background: '#f1f5f9', color: '#64748b', cursor: 'default', fontWeight: 600 }} />
                           </div>
                         </div>
+                        {Number(formData.electricFee) > 0 && (
+                          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginTop: '0.75rem' }}>
+                            <div className="form-field" style={{ marginBottom: 0 }}>
+                              <label className="form-label" style={{ fontSize: '0.8rem', color: '#d97706' }}>Thuế GTGT (8%)</label>
+                              <input type="text" className="form-input" value={formatInputCurrency(Math.round(Number(formData.electricFee) * 0.08))} readOnly style={{ background: '#fefce8', color: '#d97706', cursor: 'default', fontWeight: 600 }} />
+                            </div>
+                            <div className="form-field" style={{ marginBottom: 0 }}>
+                              <label className="form-label" style={{ fontSize: '0.8rem', color: '#047857' }}>Tổng tiền điện</label>
+                              <input type="text" className="form-input" value={formatInputCurrency(Math.round(Number(formData.electricFee) * 1.08))} readOnly style={{ background: '#d1fae5', color: '#047857', cursor: 'default', fontWeight: 600 }} />
+                            </div>
+                          </div>
+                        )}
                       </div>
                     )}
 
@@ -1545,30 +1680,57 @@ export default function InvoicesPage() {
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ width: 18, height: 18 }}><line x1="12" y1="1" x2="12" y2="23" /><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" /></svg>
                     Các loại phí khác
                   </div>
-                  <div style={{ padding: '1.25rem', display: 'grid', gridTemplateColumns: 'minmax(0,1fr) minmax(0,1fr)', gap: '1rem' }}>
-                    <div className="form-field" style={{ marginBottom: 0 }}>
-                      <label className="form-label">Phí quản lý (VNĐ)</label>
-                      <input type="text" className="form-input" value={formatInputCurrency(formData.managementFee)}
-                        onChange={(e) => handleFormChange('managementFee', parseInputCurrency(e.target.value))}
-                        placeholder={activeFee ? 'Từ phí dịch vụ' : '0'} />
+                  <div style={{ padding: '1.25rem', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                    {/* Row 1: Phí quản lý + Phí phát sinh (equal height) */}
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+                      <div className="form-field" style={{ marginBottom: 0 }}>
+                        <label className="form-label">Phí quản lý (VNĐ)</label>
+                        <input type="text" className="form-input" value={formatInputCurrency(formData.managementFee)}
+                          onChange={(e) => handleFormChange('managementFee', parseInputCurrency(e.target.value))}
+                          placeholder={activeFee ? 'Từ phí dịch vụ' : '0'} />
+                      </div>
+                      <div className="form-field" style={{ marginBottom: 0 }}>
+                        <label className="form-label">Phí phát sinh (VNĐ)</label>
+                        <input type="text" className="form-input" value={formatInputCurrency(formData.otherFee)}
+                          onChange={(e) => handleFormChange('otherFee', parseInputCurrency(e.target.value))}
+                          placeholder={activeFee ? 'Từ bảng phí dịch vụ' : '0'} />
+                      </div>
                     </div>
+
+                    {/* Row 2: Mô tả phí phát sinh (full width) */}
                     <div className="form-field" style={{ marginBottom: 0 }}>
-                      <label className="form-label">Phí gửi xe (VNĐ)</label>
-                      <input type="text" className="form-input" value={formatInputCurrency(formData.parkingFee)}
-                        onChange={(e) => handleFormChange('parkingFee', parseInputCurrency(e.target.value))}
-                        placeholder={activeFee ? 'Từ bảng phí dịch vụ' : '0'} />
-                    </div>
-                    <div className="form-field" style={{ marginBottom: 0 }}>
-                      <label className="form-label">Phí phát sinh (VNĐ)</label>
-                      <input type="text" className="form-input" value={formatInputCurrency(formData.otherFee)}
-                        onChange={(e) => handleFormChange('otherFee', parseInputCurrency(e.target.value))}
-                        placeholder={activeFee ? 'Từ bảng phí dịch vụ' : '0'} />
-                    </div>
-                    <div className="form-field" style={{ marginBottom: 0, gridColumn: '1 / -1' }}>
                       <label className="form-label">Mô tả (Phí phát sinh)</label>
                       <textarea className="form-input" value={formData.descriptionOtherFee || ''}
                         onChange={(e) => handleFormChange('descriptionOtherFee', e.target.value)}
-                        placeholder="VD: Phí sửa vòi nước..." rows="3" style={{ resize: 'vertical' }} />
+                        placeholder="VD: Phí sửa vòi nước..." rows="2" style={{ resize: 'vertical' }} />
+                    </div>
+
+                    {/* Row 3: Phí gửi xe */}
+                    <div style={{ borderTop: '1px solid #e2e8f0', paddingTop: '0.75rem' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <span className="form-label" style={{ marginBottom: 0, display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                          Phí gửi xe (VNĐ)
+                          {parkingFeeInfo.loading && <span style={{ fontSize: '0.75rem', color: '#6366f1' }}>⏳ Đang tính...</span>}
+                        </span>
+                        <span style={{ fontSize: '0.9rem', fontWeight: 600, color: '#374151' }}>{formatInputCurrency(formData.parkingFee || 0)}đ</span>
+                      </div>
+                      {parkingFeeInfo.vehicles && parkingFeeInfo.vehicles.counts && (() => {
+                        const { counts, rates } = parkingFeeInfo.vehicles;
+                        const details = [];
+                        if (counts.MOTORBIKE > 0) details.push({ icon: '🏍️', label: 'Xe máy', count: counts.MOTORBIKE, rate: rates.motorbikeFee });
+                        if (counts.CAR > 0) details.push({ icon: '🚗', label: 'Ô tô', count: counts.CAR, rate: rates.carFee });
+                        if (counts.BICYCLE > 0) details.push({ icon: '🚲', label: 'Xe đạp', count: counts.BICYCLE, rate: rates.bicycleFee });
+                        if (counts.ELECTRIC_BIKE > 0) details.push({ icon: '🛵', label: 'Xe điện', count: counts.ELECTRIC_BIKE, rate: rates.electricMotorbikeFee });
+                        if (details.length === 0) return <div style={{ fontSize: '0.75rem', color: '#9ca3af', marginTop: 4 }}>Căn hộ chưa đăng ký xe</div>;
+                        return (
+                          <div style={{ fontSize: '0.75rem', color: '#6b7280', marginTop: 4 }}>
+                            {details.map((d, i) => (
+                              <span key={i}>{i > 0 ? ' · ' : ''}{d.icon} {d.label} ×{d.count} ({formatInputCurrency(d.count * d.rate)}đ)</span>
+                            ))}
+                          </div>
+                        );
+                      })()}
+                      {parkingFeeInfo.error && <div style={{ fontSize: '0.75rem', color: '#f59e0b', marginTop: 4 }}>⚠ {parkingFeeInfo.error}</div>}
                     </div>
                   </div>
                 </div>
@@ -1576,7 +1738,8 @@ export default function InvoicesPage() {
 
               {/* Live total preview */}
               {(() => {
-                const total = (Number(formData.electricFee) || 0) + (Number(formData.waterFee) || 0) + (Number(formData.managementFee) || 0) + (Number(formData.parkingFee) || 0) + (Number(formData.otherFee) || 0);
+                const electricAfterTax = Math.round((Number(formData.electricFee) || 0) * 1.08);
+                const total = electricAfterTax + (Number(formData.waterFee) || 0) + (Number(formData.managementFee) || 0) + (Number(formData.parkingFee) || 0) + (Number(formData.otherFee) || 0);
                 return (
                   <div style={{ padding: '0.75rem 1.5rem', background: 'linear-gradient(135deg, #fef2f2, #fee2e2)', borderTop: '2px solid #fca5a5', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                     <span style={{ fontSize: '0.9rem', fontWeight: 600, color: '#991b1b' }}>Tổng tạm tính</span>
@@ -1595,117 +1758,215 @@ export default function InvoicesPage() {
         </div>
       )}
 
-      {/* ═══════════ VIEW MODAL ═══════════ */}
+            {/* ═══════════ VIEW MODAL ═══════════ */}
       {modalOpen && modalMode === 'view' && selectedInvoice && (
         <div className="modal-overlay" onClick={() => setModalOpen(false)}>
-          <div className="modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '720px', width: '95%' }}>
-            <div className="modal__header">
-              <h3 className="modal__title">Chi tiết hóa đơn</h3>
-              <button className="modal__close" onClick={() => setModalOpen(false)}>{Icons.close}</button>
-            </div>
-            <div className="modal__body">
-              <div className="detail-list">
-                <div className="detail-item">
-                  <span className="detail-label">ID</span>
-                  <span className="detail-value">{selectedInvoice.invoiceId}</span>
-                </div>
-                <div className="detail-item">
-                  <span className="detail-label">Số hóa đơn</span>
-                  <span className="detail-value detail-value--bold">{selectedInvoice.invoiceNumber || '—'}</span>
-                </div>
-                <div className="detail-item">
-                  <span className="detail-label">Căn hộ</span>
-                  <span className="detail-value">{getApartmentLabel(selectedInvoice.apartment)}</span>
-                </div>
-                <div className="detail-item">
-                  <span className="detail-label">Trạng thái</span>
-                  <span className="detail-value">
-                    <span className="badge" style={{
-                      color: statusColor[selectedInvoice.invoiceStatus]?.color || '#6b7280',
-                      backgroundColor: statusColor[selectedInvoice.invoiceStatus]?.bg || '#f3f4f6',
-                    }}>
-                      {statusLabel[selectedInvoice.invoiceStatus] || selectedInvoice.invoiceStatus}
-                    </span>
+          <div className="modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '960px', width: '96%', maxHeight: '92vh', background: '#f8fafc', padding: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+            
+            {/* Modal Header */}
+            <div style={{ background: 'linear-gradient(135deg, #1e293b, #0f172a)', padding: '1rem 1.5rem', color: '#fff', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', position: 'relative', flexShrink: 0 }}>
+              <div>
+                <div style={{ fontSize: '0.72rem', color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.8px', marginBottom: '0.25rem', fontWeight: 600 }}>Hóa đơn dịch vụ</div>
+                <h3 style={{ margin: 0, fontSize: '1.35rem', fontWeight: 700 }}>{selectedInvoice.invoiceNumber || '—'}</h3>
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '0.75rem' }}>
+                <button className="modal__close" onClick={() => setModalOpen(false)} style={{ color: '#94a3b8', background: 'rgba(255,255,255,0.1)', borderRadius: '50%', padding: '0.4rem', position: 'absolute', top: '1rem', right: '1rem' }}>{Icons.close}</button>
+                <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', justifyContent: 'flex-end', marginTop: '1.5rem', maxWidth: 360 }}>
+                  <span style={{
+                    padding: '0.34rem 0.65rem', borderRadius: '6px', fontSize: '0.74rem', fontWeight: 600,
+                    color: statusColor[selectedInvoice.invoiceStatus]?.color || '#6b7280',
+                    backgroundColor: statusColor[selectedInvoice.invoiceStatus]?.bg || '#f3f4f6',
+                    boxShadow: '0 2px 4px rgba(0,0,0,0.1)'
+                  }}>
+                    {statusLabel[selectedInvoice.invoiceStatus] || selectedInvoice.invoiceStatus}
                   </span>
+                  {getPendingCashPayment(selectedInvoice) && (
+                    <span style={{ padding: '0.34rem 0.65rem', borderRadius: '6px', fontSize: '0.74rem', fontWeight: 700, color: '#92400e', background: '#fef3c7' }}>
+                      Chờ xác nhận tiền mặt
+                    </span>
+                  )}
                 </div>
-                <div className="detail-item">
-                  <span className="detail-label">Hạn thanh toán</span>
-                  <span className="detail-value">{formatDate(selectedInvoice.dueDate)}</span>
+              </div>
+            </div>
+
+            <div className="modal__body" style={{ padding: '1.1rem 1.5rem', background: '#fff', overflowY: 'auto', flex: '1 1 auto' }}>
+              
+              {/* Info Grid */}
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '0.8rem', marginBottom: '1rem' }}>
+                <div style={{ background: '#f8fafc', padding: '0.85rem', borderRadius: '10px', border: '1px solid #e2e8f0' }}>
+                  <h4 style={{ margin: '0 0 0.75rem 0', fontSize: '0.78rem', color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.35px', display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{width: 16, height: 16}}><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" /><polyline points="9 22 9 12 15 12 15 22" /></svg>
+                    Thông tin căn hộ
+                  </h4>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                    <div>
+                      <div style={{ fontSize: '0.72rem', color: '#94a3b8', marginBottom: '0.12rem' }}>Căn hộ / Tầng / Tòa</div>
+                      <div style={{ fontSize: '0.9rem', fontWeight: 600, color: '#0f172a' }}>{getApartmentLabel(selectedInvoice.apartment)}</div>
+                    </div>
+                  </div>
                 </div>
-                <div className="detail-item">
-                  <span className="detail-label">Người tạo</span>
-                  <span className="detail-value">{selectedInvoice.creator?.fullName || '—'}</span>
+
+                <div style={{ background: '#f8fafc', padding: '0.85rem', borderRadius: '10px', border: '1px solid #e2e8f0' }}>
+                  <h4 style={{ margin: '0 0 0.75rem 0', fontSize: '0.78rem', color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.35px', display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{width: 16, height: 16}}><rect x="3" y="4" width="18" height="18" rx="2" ry="2" /><line x1="16" y1="2" x2="16" y2="6" /><line x1="8" y1="2" x2="8" y2="6" /><line x1="3" y1="10" x2="21" y2="10" /></svg>
+                    Chi tiết thời gian
+                  </h4>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.75rem' }}>
+                      <span style={{ fontSize: '0.78rem', color: '#64748b' }}>Ngày tạo:</span>
+                      <span style={{ fontSize: '0.8rem', fontWeight: 500, color: '#1e293b', textAlign: 'right' }}>{formatDate(selectedInvoice.createdAt || selectedInvoice.createdDate)}</span>
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.75rem' }}>
+                      <span style={{ fontSize: '0.78rem', color: '#64748b' }}>Người lập:</span>
+                      <span style={{ fontSize: '0.8rem', fontWeight: 500, color: '#1e293b', textAlign: 'right' }}>{selectedInvoice.creator?.fullName || 'Hệ thống'}</span>
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', borderTop: '1px dashed #cbd5e1', paddingTop: '0.75rem', marginTop: '0.25rem' }}>
+                      <span style={{ fontSize: '0.78rem', color: '#dc2626', fontWeight: 600 }}>Hạn thanh toán:</span>
+                      <span style={{ fontSize: '0.8rem', fontWeight: 700, color: '#dc2626', textAlign: 'right' }}>{formatDate(selectedInvoice.dueDate)}</span>
+                    </div>
+                  </div>
                 </div>
+
+                {(() => {
+                  const pendingCashPayment = getPendingCashPayment(selectedInvoice);
+                  const paidAmount = getSuccessfulPaidAmount(selectedInvoice);
+                  const remainingAmount = Math.max((Number(selectedInvoice.totalAmount) || 0) - paidAmount, 0);
+                  const ps = getPaymentSummaryStatus(selectedInvoice);
+                  return (
+                    <div style={{ background: pendingCashPayment ? '#fffbeb' : '#f8fafc', padding: '0.85rem', borderRadius: '10px', border: pendingCashPayment ? '1px solid #fde68a' : '1px solid #e2e8f0' }}>
+                      <h4 style={{ margin: '0 0 0.75rem 0', fontSize: '0.78rem', color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.35px', display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ width: 16, height: 16 }}><rect x="1" y="4" width="22" height="16" rx="2" ry="2" /><line x1="1" y1="10" x2="23" y2="10" /></svg>
+                        Tình trạng thu tiền
+                      </h4>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', gap: '1rem' }}>
+                          <span style={{ fontSize: '0.76rem', color: '#64748b' }}>Trạng thái:</span>
+                          <span style={{ fontSize: '0.73rem', fontWeight: 700, color: ps.color, background: ps.bg, padding: '0.18rem 0.4rem', borderRadius: 6, textAlign: 'right' }}>{ps.label}</span>
+                        </div>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', gap: '1rem' }}>
+                          <span style={{ fontSize: '0.76rem', color: '#64748b' }}>Đã thu:</span>
+                          <span style={{ fontSize: '0.8rem', fontWeight: 700, color: '#047857' }}>{money(paidAmount)}</span>
+                        </div>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', gap: '1rem' }}>
+                          <span style={{ fontSize: '0.76rem', color: '#64748b' }}>Còn phải thu:</span>
+                          <span style={{ fontSize: '0.8rem', fontWeight: 700, color: remainingAmount > 0 ? '#dc2626' : '#047857' }}>{money(remainingAmount)}</span>
+                        </div>
+                        {pendingCashPayment && (
+                          <div style={{ borderTop: '1px dashed #fbbf24', paddingTop: '0.55rem', marginTop: '0.05rem', display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
+                            <div style={{ fontSize: '0.74rem', lineHeight: 1.45, color: '#92400e' }}>Cư dân đề xuất nộp tiền mặt: <strong>{pendingCashPayment.payerName || '—'}</strong></div>
+                            <button
+                              className="btn btn--sm"
+                              disabled={paySubmitting}
+                              onClick={() => handleConfirmCashPayment(pendingCashPayment.paymentId)}
+                              style={{ background: '#16a34a', color: '#fff', border: 'none', alignSelf: 'flex-start', fontSize: '0.74rem', padding: '0.4rem 0.65rem' }}
+                            >
+                              Xác nhận đã thu
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })()}
               </div>
 
               {/* Fee breakdown */}
-              <h4 style={{ margin: '1.5rem 0 0.75rem', fontSize: '0.95rem', fontWeight: 600, color: 'var(--text, #1e293b)' }}>Chi tiết phí</h4>
-              <table className="data-table" style={{ marginBottom: '1rem' }}>
-                <thead>
-                  <tr>
-                    <th>Hạng mục</th>
-                    <th style={{ textAlign: 'right' }}>Số tiền</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr><td>Tiền điện</td><td style={{ textAlign: 'right' }}>{money(selectedInvoice.electricFee)}</td></tr>
-                  <tr><td>Tiền nước</td><td style={{ textAlign: 'right' }}>{money(selectedInvoice.waterFee)}</td></tr>
-                  <tr><td>Phí quản lý</td><td style={{ textAlign: 'right' }}>{money(selectedInvoice.managementFee)}</td></tr>
-                  <tr><td>Phí gửi xe</td><td style={{ textAlign: 'right' }}>{money(selectedInvoice.parkingFee)}</td></tr>
-                  <tr><td>Phí khác</td><td style={{ textAlign: 'right' }}>{money(selectedInvoice.otherFee)}</td></tr>
-                  <tr style={{ fontWeight: 700, borderTop: '2px solid var(--border, #e2e8f0)' }}>
-                    <td>Tổng cộng</td>
-                    <td style={{ textAlign: 'right', color: '#dc2626' }}>{money(selectedInvoice.totalAmount)}</td>
-                  </tr>
-                </tbody>
-              </table>
+              <div style={{ border: '1px solid #e2e8f0', borderRadius: '10px', overflow: 'hidden', marginBottom: '1.25rem' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
+                  <thead style={{ background: '#f1f5f9', borderBottom: '1px solid #e2e8f0' }}>
+                    <tr>
+                      <th style={{ padding: '0.75rem 1rem', fontSize: '0.76rem', fontWeight: 600, color: '#475569', textTransform: 'uppercase', letterSpacing: '0.35px' }}>Hạng mục phí</th>
+                      <th style={{ padding: '0.75rem 1rem', fontSize: '0.76rem', fontWeight: 600, color: '#475569', textTransform: 'uppercase', letterSpacing: '0.35px', textAlign: 'right' }}>Thành tiền</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {Number(selectedInvoice.electricFee) > 0 && (
+                      <tr style={{ borderBottom: '1px solid #f1f5f9' }}>
+                        <td style={{ padding: '0.75rem 1rem', fontSize: '0.82rem', color: '#334155', display: 'flex', alignItems: 'center', gap: '0.6rem' }}><span style={{background: '#dbeafe', color: '#1d4ed8', padding: '0.24rem', borderRadius: '6px', display: 'inline-flex'}}><svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" strokeWidth="2" fill="none"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" /></svg></span> Tiền điện</td>
+                        <td style={{ padding: '0.75rem 1rem', fontSize: '0.86rem', fontWeight: 600, color: '#1e293b', textAlign: 'right' }}>{money(selectedInvoice.electricFee)}</td>
+                      </tr>
+                    )}
+                    {Number(selectedInvoice.waterFee) > 0 && (
+                      <tr style={{ borderBottom: '1px solid #f1f5f9' }}>
+                        <td style={{ padding: '0.75rem 1rem', fontSize: '0.82rem', color: '#334155', display: 'flex', alignItems: 'center', gap: '0.6rem' }}><span style={{background: '#e0f2fe', color: '#0369a1', padding: '0.24rem', borderRadius: '6px', display: 'inline-flex'}}><svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" strokeWidth="2" fill="none"><path d="M12 2.69l5.66 5.66a8 8 0 1 1-11.31 0z" /></svg></span> Tiền nước</td>
+                        <td style={{ padding: '0.75rem 1rem', fontSize: '0.86rem', fontWeight: 600, color: '#1e293b', textAlign: 'right' }}>{money(selectedInvoice.waterFee)}</td>
+                      </tr>
+                    )}
+                    {Number(selectedInvoice.managementFee) > 0 && (
+                      <tr style={{ borderBottom: '1px solid #f1f5f9' }}>
+                        <td style={{ padding: '0.75rem 1rem', fontSize: '0.82rem', color: '#334155', display: 'flex', alignItems: 'center', gap: '0.6rem' }}><span style={{background: '#f3e8ff', color: '#7e22ce', padding: '0.24rem', borderRadius: '6px', display: 'inline-flex'}}><svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" strokeWidth="2" fill="none"><rect x="3" y="3" width="18" height="18" rx="2" ry="2" /><line x1="3" y1="9" x2="21" y2="9" /><line x1="9" y1="21" x2="9" y2="9" /></svg></span> Phí quản lý</td>
+                        <td style={{ padding: '0.75rem 1rem', fontSize: '0.86rem', fontWeight: 600, color: '#1e293b', textAlign: 'right' }}>{money(selectedInvoice.managementFee)}</td>
+                      </tr>
+                    )}
+                    {Number(selectedInvoice.parkingFee) > 0 && (
+                      <tr style={{ borderBottom: '1px solid #f1f5f9' }}>
+                        <td style={{ padding: '0.75rem 1rem', fontSize: '0.82rem', color: '#334155', display: 'flex', alignItems: 'center', gap: '0.6rem' }}><span style={{background: '#dcfce7', color: '#15803d', padding: '0.24rem', borderRadius: '6px', display: 'inline-flex'}}><svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" strokeWidth="2" fill="none"><rect x="1" y="3" width="15" height="13" /><polygon points="16 8 20 8 23 11 23 16 16 16 16 8" /><circle cx="5.5" cy="18.5" r="2.5" /><circle cx="18.5" cy="18.5" r="2.5" /></svg></span> Phí gửi xe</td>
+                        <td style={{ padding: '0.75rem 1rem', fontSize: '0.86rem', fontWeight: 600, color: '#1e293b', textAlign: 'right' }}>{money(selectedInvoice.parkingFee)}</td>
+                      </tr>
+                    )}
+                    {Number(selectedInvoice.otherFee) > 0 && (
+                      <tr>
+                        <td style={{ padding: '0.75rem 1rem', fontSize: '0.82rem', color: '#334155', display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+                          <span style={{background: '#ffedd5', color: '#c2410c', padding: '0.24rem', borderRadius: '6px', display: 'inline-flex'}}><svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" strokeWidth="2" fill="none"><circle cx="12" cy="12" r="10" /><line x1="12" y1="8" x2="12" y2="12" /><line x1="12" y1="16" x2="12.01" y2="16" /></svg></span> Phí khác
+                          {selectedInvoice.descriptionOtherFee && <span style={{ fontSize: '0.7rem', color: '#94a3b8', fontStyle: 'italic', marginLeft: '0.15rem' }}>({selectedInvoice.descriptionOtherFee})</span>}
+                        </td>
+                        <td style={{ padding: '0.75rem 1rem', fontSize: '0.86rem', fontWeight: 600, color: '#1e293b', textAlign: 'right' }}>{money(selectedInvoice.otherFee)}</td>
+                      </tr>
+                    )}
+                    {Number(selectedInvoice.totalAmount) === 0 && (
+                      <tr>
+                        <td colSpan="2" style={{ padding: '2rem', textAlign: 'center', color: '#94a3b8', fontStyle: 'italic' }}>Không có khoản phí nào</td>
+                      </tr>
+                    )}
+                  </tbody>
+                  <tfoot>
+                    <tr style={{ background: 'linear-gradient(to right, #fef2f2, #fee2e2)' }}>
+                      <td style={{ padding: '0.9rem 1rem', fontSize: '0.88rem', fontWeight: 700, color: '#991b1b', textTransform: 'uppercase' }}>Tổng cộng</td>
+                      <td style={{ padding: '0.9rem 1rem', fontSize: '1.05rem', fontWeight: 800, color: '#dc2626', textAlign: 'right' }}>{money(selectedInvoice.totalAmount)}</td>
+                    </tr>
+                  </tfoot>
+                </table>
+              </div>
 
               {/* Payment history */}
               {selectedInvoice.payments && selectedInvoice.payments.length > 0 && (
-                <>
-                  <h4 style={{ margin: '1.5rem 0 0.75rem', fontSize: '0.95rem', fontWeight: 600, color: 'var(--text, #1e293b)' }}>Lịch sử thanh toán</h4>
-                  <table className="data-table">
-                    <thead>
-                      <tr>
-                        <th>Mã GD</th>
-                        <th>Người thanh toán</th>
-                        <th>Số tiền</th>
-                        <th>Thời gian</th>
-                        <th>Phương thức</th>
-                        <th>Trạng thái</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {selectedInvoice.payments.map((p) => {
-                        const psc = paymentStatusColor[p.paymentStatus] || { color: '#6b7280', bg: '#f3f4f6' };
-                        return (
-                          <tr key={p.paymentId}>
-                            <td style={{ fontSize: '0.85rem' }}>{p.transactionCode || '—'}</td>
-                            <td>
-                              <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                                <svg viewBox="0 0 24 24" fill="none" stroke="#64748b" strokeWidth="2" style={{ width: 14, height: 14, flexShrink: 0 }}>
-                                  <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" /><circle cx="12" cy="7" r="4" />
-                                </svg>
-                                <span style={{ fontWeight: 500, color: '#334155' }}>{p.payerName || '—'}</span>
+                <div>
+                  <h4 style={{ margin: '0 0 0.75rem 0', fontSize: '0.84rem', fontWeight: 600, color: '#1e293b', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                    <svg viewBox="0 0 24 24" width="18" height="18" stroke="currentColor" strokeWidth="2" fill="none"><polyline points="1 4 1 10 7 10" /><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10" /></svg>
+                    Lịch sử thanh toán
+                  </h4>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                    {selectedInvoice.payments.map((p) => {
+                      const psc = paymentStatusColor[p.paymentStatus] || { color: '#6b7280', bg: '#f3f4f6' };
+                      return (
+                        <div key={p.paymentId} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0.75rem', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '8px', flexWrap: 'wrap', gap: '0.75rem' }}>
+                          <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
+                            <div style={{ width: '32px', height: '32px', borderRadius: '50%', background: p.paymentMethod === 'MOMO' ? '#fce4ec' : '#dcfce7', color: p.paymentMethod === 'MOMO' ? '#ae2070' : '#16a34a', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1rem', flexShrink: 0 }}>
+                              {p.paymentMethod === 'MOMO' ? '📱' : '💵'}
+                            </div>
+                            <div>
+                              <div style={{ fontWeight: 600, color: '#1e293b', fontSize: '0.82rem', marginBottom: '0.12rem' }}>{money(p.amount)} <span style={{ fontSize: '0.68rem', color: '#94a3b8', fontWeight: 400, marginLeft: '0.2rem' }}>qua {p.paymentMethod}</span></div>
+                              <div style={{ fontSize: '0.7rem', color: '#64748b' }}>
+                                {formatDateTime(p.paymentDateTime)} • {p.payerName || 'Khách hàng'}
+                                {p.payerPhoneNumber ? ` • SĐT: ${p.payerPhoneNumber}` : ''}
+                                {' '}• GD: {p.transactionCode || '—'}
                               </div>
-                            </td>
-                            <td>{money(p.amount)}</td>
-                            <td>{formatDateTime(p.paymentDateTime)}</td>
-                            <td>{p.paymentMethod || '—'}</td>
-                            <td>
-                              <span className="badge" style={{ color: psc.color, backgroundColor: psc.bg }}>
-                                {paymentStatusLabel[p.paymentStatus] || p.paymentStatus}
-                              </span>
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </>
+                            </div>
+                          </div>
+                          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '0.5rem' }}>
+                            <span style={{ fontSize: '0.7rem', fontWeight: 600, color: psc.color, background: psc.bg, padding: '0.22rem 0.45rem', borderRadius: '4px' }}>
+                              {paymentStatusLabel[p.paymentStatus] || p.paymentStatus}
+                            </span>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
               )}
             </div>
-            <div className="modal__footer">
+
+            <div className="modal__footer" style={{ padding: '0.85rem 1.5rem', background: '#f8fafc', borderTop: '1px solid #e2e8f0', display: 'flex', justifyContent: 'flex-end', gap: '0.65rem', flexShrink: 0 }}>
               <button className="btn btn--ghost" onClick={() => setModalOpen(false)}>Đóng</button>
               {(selectedInvoice.invoiceStatus === 'UNPAID' || selectedInvoice.invoiceStatus === 'OVERDUE') && (
                 <button
@@ -1718,13 +1979,14 @@ export default function InvoicesPage() {
                     display: 'flex',
                     alignItems: 'center',
                     gap: '0.5rem',
+                    boxShadow: '0 2px 4px rgba(22, 163, 74, 0.3)'
                   }}
                 >
                   <span className="btn__icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ width: 16, height: 16 }}><rect x="1" y="4" width="22" height="16" rx="2" ry="2" /><line x1="1" y1="10" x2="23" y2="10" /></svg></span>
                   Thanh toán
                 </button>
               )}
-              <button className="btn btn--primary" onClick={() => { setModalOpen(false); setTimeout(() => openEditModal(selectedInvoice), 100); }}>
+              <button className="btn btn--primary" onClick={() => { setModalOpen(false); setTimeout(() => openEditModal(selectedInvoice), 100); }} style={{ boxShadow: '0 2px 4px rgba(59, 130, 246, 0.3)' }}>
                 Chỉnh sửa
               </button>
             </div>
@@ -1732,7 +1994,7 @@ export default function InvoicesPage() {
         </div>
       )}
 
-      {/* ═══════════ PAYMENT METHOD MODAL ═══════════ */}
+{/* ═══════════ PAYMENT METHOD MODAL ═══════════ */}
       {payModalOpen && (
         <div className="modal-overlay" onClick={() => setPayModalOpen(false)}>
           <div className="modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '560px', width: '90%' }}>
@@ -2024,10 +2286,61 @@ export default function InvoicesPage() {
                   <input type="text" className="form-input" value={formatInputCurrency(tableFeeForm.managementFee)}
                     onChange={(e) => setTableFeeForm(p => ({ ...p, managementFee: parseInputCurrency(e.target.value) }))} placeholder="0" />
                 </div>
-                <div className="form-field">
-                  <label className="form-label">Phí gửi xe (VNĐ/tháng)</label>
-                  <input type="text" className="form-input" value={formatInputCurrency(tableFeeForm.parkingFee)}
-                    onChange={(e) => setTableFeeForm(p => ({ ...p, parkingFee: parseInputCurrency(e.target.value) }))} placeholder="0" />
+                <div className="form-field form-field--full" style={{ padding: 0, background: '#ffffff', borderRadius: '8px', border: '1px solid #cbd5e1', marginBottom: '1rem', overflow: 'hidden', boxShadow: '0 2px 4px rgba(0,0,0,0.02)', marginTop: '0.5rem' }}>
+                  <div style={{ background: 'linear-gradient(135deg, #eff6ff, #dbeafe)', padding: '0.85rem 1.25rem', borderBottom: '1px solid #bfdbfe', fontWeight: 600, color: '#1e3a8a', fontSize: '0.95rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ width: 18, height: 18 }}><circle cx="12" cy="12" r="10"/><path d="M16 12H8"/><path d="M12 8l-4 4 4 4"/></svg>
+                    Cấu hình phí gửi xe
+                  </div>
+                  <div style={{ padding: '1.25rem' }}>
+                    <div style={{ border: '1px solid #e2e8f0', borderRadius: '8px', overflow: 'hidden' }}>
+                      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.8rem', textAlign: 'left' }}>
+                        <thead style={{ background: '#f1f5f9' }}>
+                          <tr>
+                            <th style={{ padding: '0.5rem 0.75rem', borderBottom: '1px solid #e2e8f0', fontWeight: 600, color: '#475569', width: '50%' }}>Loại phương tiện</th>
+                            <th style={{ padding: '0.5rem 0.75rem', borderBottom: '1px solid #e2e8f0', fontWeight: 600, color: '#475569', textAlign: 'right' }}>Đơn giá (VNĐ/tháng)</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          <tr style={{ borderBottom: '1px solid #e2e8f0' }}>
+                            <td style={{ padding: '0.5rem 0.75rem', color: '#1e293b' }}>Xe đạp</td>
+                            <td style={{ padding: '0.4rem 0.5rem' }}>
+                              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '0.5rem' }}>
+                                  <input className="form-input" style={{ padding: '0.25rem', minHeight: 'unset', textAlign: 'right', width: '120px' }} value={formatInputCurrency(tableFeeForm.bicycleParkingFee)} onChange={e => setTableFeeForm(p => ({ ...p, bicycleParkingFee: parseInputCurrency(e.target.value) }))} type="text" placeholder="0" />
+                                  <span style={{ color: '#64748b', fontSize: '0.8rem' }}>đ</span>
+                              </div>
+                            </td>
+                          </tr>
+                          <tr style={{ borderBottom: '1px solid #e2e8f0' }}>
+                            <td style={{ padding: '0.5rem 0.75rem', color: '#1e293b' }}>Xe máy điện</td>
+                            <td style={{ padding: '0.4rem 0.5rem' }}>
+                              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '0.5rem' }}>
+                                  <input className="form-input" style={{ padding: '0.25rem', minHeight: 'unset', textAlign: 'right', width: '120px' }} value={formatInputCurrency(tableFeeForm.electricMotorbikeParkingFee)} onChange={e => setTableFeeForm(p => ({ ...p, electricMotorbikeParkingFee: parseInputCurrency(e.target.value) }))} type="text" placeholder="0" />
+                                  <span style={{ color: '#64748b', fontSize: '0.8rem' }}>đ</span>
+                              </div>
+                            </td>
+                          </tr>
+                          <tr style={{ borderBottom: '1px solid #e2e8f0' }}>
+                            <td style={{ padding: '0.5rem 0.75rem', color: '#1e293b' }}>Xe máy</td>
+                            <td style={{ padding: '0.4rem 0.5rem' }}>
+                              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '0.5rem' }}>
+                                  <input className="form-input" style={{ padding: '0.25rem', minHeight: 'unset', textAlign: 'right', width: '120px' }} value={formatInputCurrency(tableFeeForm.motorbikeParkingFee)} onChange={e => setTableFeeForm(p => ({ ...p, motorbikeParkingFee: parseInputCurrency(e.target.value) }))} type="text" placeholder="0" />
+                                  <span style={{ color: '#64748b', fontSize: '0.8rem' }}>đ</span>
+                              </div>
+                            </td>
+                          </tr>
+                          <tr>
+                            <td style={{ padding: '0.5rem 0.75rem', color: '#1e293b' }}>Ô tô</td>
+                            <td style={{ padding: '0.4rem 0.5rem' }}>
+                              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '0.5rem' }}>
+                                  <input className="form-input" style={{ padding: '0.25rem', minHeight: 'unset', textAlign: 'right', width: '120px' }} value={formatInputCurrency(tableFeeForm.carParkingFee)} onChange={e => setTableFeeForm(p => ({ ...p, carParkingFee: parseInputCurrency(e.target.value) }))} type="text" placeholder="0" />
+                                  <span style={{ color: '#64748b', fontSize: '0.8rem' }}>đ</span>
+                              </div>
+                            </td>
+                          </tr>
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
                 </div>
                 <div className="form-field form-field--full">
                   <label className="form-label">Phí khác (VNĐ)</label>

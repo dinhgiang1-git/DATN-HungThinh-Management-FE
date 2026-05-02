@@ -19,9 +19,9 @@ const vehicleService = {
   delete: (vehicleId) => {
     return api.delete(`/api/v1/vehicles/${vehicleId}`);
   },
-  calculateParkingFee: (apartmentId, motorbikeFee, carFee) => {
+  calculateParkingFee: (apartmentId, motorbikeFee, carFee, bicycleFee, electricMotorbikeFee) => {
     return api.get('/api/v1/vehicles/parking-fee', {
-      params: { apartmentId, motorbikeFee, carFee },
+      params: { apartmentId, motorbikeFee, carFee, bicycleFee, electricMotorbikeFee },
     });
   },
 };

@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { toast } from 'react-toastify';
 import feedbackService from '../services/feedbackService';
 
@@ -76,6 +77,23 @@ const Icons = {
       <polyline points="9 17 4 12 9 7" /><path d="M20 18v-2a4 4 0 0 0-4-4H4" />
     </svg>
   ),
+  wrench: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+      <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z" />
+    </svg>
+  ),
+  box: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+      <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z" />
+      <polyline points="3.27 6.96 12 12.01 20.73 6.96" />
+      <line x1="12" y1="22.08" x2="12" y2="12" />
+    </svg>
+  ),
+  message: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+      <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+    </svg>
+  ),
 };
 
 /* ─── Custom Status Dropdown ─── */
@@ -142,8 +160,27 @@ function StatusDropdown({ value, onChange }) {
     </div>
   );
 }
+const formatDate = (dateStr) => {
+  if (!dateStr) return '—';
+  try {
+    const date = new Date(dateStr);
+    if (isNaN(date.getTime())) return dateStr;
+    const d = String(date.getDate()).padStart(2, '0');
+    const m = String(date.getMonth() + 1).padStart(2, '0');
+    const y = date.getFullYear();
+    const h = String(date.getHours()).padStart(2, '0');
+    const min = String(date.getMinutes()).padStart(2, '0');
+    return `${d}/${m}/${y} ${h}:${min}`;
+  } catch { return '—'; }
+};
+
+const getApartmentLabel = (apt) => {
+  if (!apt) return '—';
+  return `${apt.block ? `${apt.block}-` : ''}${apt.apartmentNumber || ''}${apt.floor != null ? ` (Tầng ${apt.floor})` : ''}`;
+};
 
 export default function FeedbacksPage() {
+  const navigate = useNavigate();
   /* ─── state ─── */
   const [feedbacks, setFeedbacks] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -253,7 +290,14 @@ export default function FeedbacksPage() {
   const openDeleteModal = (fb) => { setDeleteTarget(fb); setDeleteModalOpen(true); };
 
   const handleFormChange = (field, value) => {
-    setFormData((prev) => ({ ...prev, [field]: value }));
+    setFormData((prev) => {
+      const newData = { ...prev, [field]: value };
+      // Tự động chuyển sang Đang xử lý nếu đang ở Chờ xử lý và có nội dung phản hồi
+      if (modalMode === 'respond' && field === 'response' && value.trim() && prev.feedbackStatus === 'PENDING') {
+        newData.feedbackStatus = 'IN_PROGRESS';
+      }
+      return newData;
+    });
     if (formErrors[field]) setFormErrors((prev) => ({ ...prev, [field]: '' }));
   };
 
@@ -328,11 +372,14 @@ export default function FeedbacksPage() {
       setDeleting(false);
     }
   };
-
-  const getApartmentLabel = (apt) => {
-    if (!apt) return '—';
-    return `${apt.block ? `${apt.block}-` : ''}${apt.apartmentNumber || ''}${apt.floor != null ? ` (Tầng ${apt.floor})` : ''}`;
+  
+  const handleCreateMaintenance = (fb) => {
+    const desc = `${fb.title}: ${fb.content}`;
+    const aptId = fb.apartment?.id || fb.apartmentId || '';
+    const devId = fb.deviceId || (fb.device ? fb.device.deviceId : '');
+    navigate(`/maintenances?feedbackId=${fb.feedbackId}&description=${encodeURIComponent(desc)}&apartmentId=${aptId}&deviceId=${devId}`);
   };
+
 
   /* ─── render ─── */
   return (
@@ -397,6 +444,7 @@ export default function FeedbacksPage() {
             <thead>
               <tr>
                 <th className="data-table__th--id">ID</th>
+                <th>Loại</th>
                 <th>Tiêu đề</th>
                 <th>Căn hộ</th>
                 <th>Trạng thái</th>
@@ -410,6 +458,17 @@ export default function FeedbacksPage() {
                 return (
                   <tr key={fb.feedbackId}>
                     <td className="data-table__cell--id">{fb.feedbackId}</td>
+                    <td>
+                      {fb.feedbackType === 'MAINTENANCE' ? (
+                        <span className="badge-type badge-type--maintenance" title="Sửa chữa/Bảo trì">
+                          {Icons.wrench}
+                        </span>
+                      ) : (
+                        <span className="badge-type badge-type--general" title="Ý kiến/Kiến nghị">
+                          {Icons.message}
+                        </span>
+                      )}
+                    </td>
                     <td className="data-table__cell--bold">{fb.title}</td>
                     <td>{getApartmentLabel(fb.apartment)}</td>
                     <td>
@@ -576,37 +635,35 @@ export default function FeedbacksPage() {
             </div>
             <form onSubmit={handleSubmit} className="modal__body">
               {/* ── Feedback card từ cư dân ── */}
-              <div className="fb-card">
-                <div className="fb-card__header">
-                  <div className="fb-card__icon">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                      <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+              {/* Summary of resident request */}
+              <div className="fb-res-summary">
+                <div className="fb-res-summary__header">
+                  <div className="fb-res-summary__apt">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ width: 14, height: 14, color: '#3b82f6' }}>
+                      <rect x="4" y="2" width="16" height="20" rx="2" />
+                      <path d="M9 22V12h6v10" />
                     </svg>
-                  </div>
-                  <div className="fb-card__meta">
-                    <span className="fb-card__label">Yêu cầu từ cư dân</span>
-                    <span className="fb-card__apt">
-                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ width: 12, height: 12 }}>
-                        <rect x="4" y="2" width="16" height="20" rx="2" />
-                        <path d="M9 22V12h6v10" />
-                      </svg>
-                      {getApartmentLabel(selectedFeedback.apartment)}
-                    </span>
+                    {getApartmentLabel(selectedFeedback.apartment)}
                   </div>
                   <span
                     className="badge"
                     style={{
                       color: (statusColor[selectedFeedback.feedbackStatus] || {}).color || '#6b7280',
                       backgroundColor: (statusColor[selectedFeedback.feedbackStatus] || {}).bg || '#f3f4f6',
-                      marginLeft: 'auto',
+                      padding: '4px 10px',
+                      borderRadius: '30px',
+                      fontSize: '11px'
                     }}
                   >
                     {statusLabel[selectedFeedback.feedbackStatus] || selectedFeedback.feedbackStatus}
                   </span>
                 </div>
-                <h4 className="fb-card__title">{selectedFeedback.title}</h4>
-                <div className="fb-card__content">
-                  <p>{selectedFeedback.content}</p>
+                
+                <div className="fb-res-summary__body">
+                  <h4 className="fb-res-summary__title">{selectedFeedback.title}</h4>
+                  <div className="fb-res-summary__text">
+                    {selectedFeedback.content}
+                  </div>
                 </div>
               </div>
 
@@ -669,52 +726,91 @@ export default function FeedbacksPage() {
                 {Icons.close}
               </button>
             </div>
-            <div className="modal__body">
-              {/* Meta row: apartment + status */}
-              <div className="fbv__meta">
-                <span className="fbv__apt">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ width: 14, height: 14 }}>
+            <div className="modal__body fbv__body">
+              {/* Header Bar: Apt Pill + Status Badge */}
+              <div className="fbv__header-bar">
+                <div className="fbv__apt-pill">
+                  <svg className="fbv__apt-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
                     <rect x="4" y="2" width="16" height="20" rx="2" />
                     <path d="M9 22V12h6v10" />
                   </svg>
                   {getApartmentLabel(selectedFeedback.apartment)}
-                </span>
-                <span
-                  className="badge"
-                  style={{
-                    color: statusColor[selectedFeedback.feedbackStatus]?.color || '#6b7280',
-                    backgroundColor: statusColor[selectedFeedback.feedbackStatus]?.bg || '#f3f4f6',
-                  }}
-                >
-                  {statusLabel[selectedFeedback.feedbackStatus] || selectedFeedback.feedbackStatus}
-                </span>
+                </div>
+                <div style={{ display: 'flex', gap: '8px' }}>
+                  <span className={`badge-type-label ${selectedFeedback.feedbackType === 'MAINTENANCE' ? 'badge-type-label--maintenance' : 'badge-type-label--general'}`}>
+                    {selectedFeedback.feedbackType === 'MAINTENANCE' ? '🛠️ Bảo trì' : '💬 Góp ý'}
+                  </span>
+                  <span
+                    className="badge"
+                    style={{
+                      color: statusColor[selectedFeedback.feedbackStatus]?.color || '#6b7280',
+                      backgroundColor: statusColor[selectedFeedback.feedbackStatus]?.bg || '#f3f4f6',
+                      padding: '4px 12px',
+                      borderRadius: '30px'
+                    }}
+                  >
+                    {statusLabel[selectedFeedback.feedbackStatus] || selectedFeedback.feedbackStatus}
+                  </span>
+                </div>
               </div>
 
-              {/* Title */}
-              <h4 className="fbv__title">{selectedFeedback.title}</h4>
-
-              {/* Content */}
-              <div className="fbv__section">
-                <div className="fbv__section-label">Nội dung phản hồi</div>
-                <div className="fbv__content">{selectedFeedback.content}</div>
+              {/* Meta Grid: Sender & Date */}
+              <div className="fbv__meta-grid">
+                <div className="fbv__meta-card">
+                  <div className="fbv__meta-icon">👤</div>
+                  <div className="fbv__meta-info">
+                    <span className="fbv__meta-label">Người gửi</span>
+                    <span className="fbv__meta-value">{selectedFeedback.senderName || 'Cư dân'}</span>
+                  </div>
+                </div>
+                <div className="fbv__meta-card">
+                  <div className="fbv__meta-icon">📅</div>
+                  <div className="fbv__meta-info">
+                    <span className="fbv__meta-label">Ngày gửi</span>
+                    <span className="fbv__meta-value">{formatDate(selectedFeedback.createdAt)}</span>
+                  </div>
+                </div>
               </div>
 
-              {/* Admin response */}
-              <div className="fbv__section">
-                <div className="fbv__section-label fbv__section-label--response">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ width: 14, height: 14 }}>
-                    <polyline points="9 17 4 12 9 7" /><path d="M20 18v-2a4 4 0 0 0-4-4H4" />
-                  </svg>
-                  Phản hồi từ ban quản lý
+              {/* Device Box (If maintenance) */}
+              {selectedFeedback.deviceName && (
+                <div className="fbv__device-box">
+                  <div className="fbv__device-top">
+                    <span className="fbv__device-tag">Hạng mục sửa chữa</span>
+                    <div style={{ color: '#60a5fa' }}>{Icons.box}</div>
+                  </div>
+                  <div className="fbv__device-main">
+                    <div className="fbv__device-img">📦</div>
+                    <div className="fbv__device-detail">
+                      <div className="fbv__device-name">{selectedFeedback.deviceName}</div>
+                      <div className="fbv__device-id">Device Ref: #{selectedFeedback.deviceId}</div>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Content Card */}
+              <div className="fbv__content-card">
+                <h4 className="fbv__title">{selectedFeedback.title}</h4>
+                <div className="fbv__text">{selectedFeedback.content}</div>
+              </div>
+
+              {/* Response Section */}
+              <div className="fbv__response-section">
+                <div className="fbv__response-header">
+                  <span style={{ color: 'var(--primary)' }}>{Icons.reply}</span>
+                  Phản hồi từ Ban quản lý
                 </div>
                 {selectedFeedback.response ? (
-                  <div className="fbv__response">{selectedFeedback.response}</div>
+                  <div className="fbv__response-bubble">
+                    <div className="fbv__text" style={{ fontSize: '0.95rem' }}>{selectedFeedback.response}</div>
+                  </div>
                 ) : (
-                  <div className="fbv__no-response">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" style={{ width: 18, height: 18 }}>
+                  <div className="fbv__response-empty">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" style={{ width: 32, height: 32, marginBottom: 8 }}>
                       <circle cx="12" cy="12" r="10" /><path d="M12 6v6l4 2" />
                     </svg>
-                    Chưa có phản hồi
+                    <span>Chưa có nội dung phản hồi cho cư dân</span>
                   </div>
                 )}
               </div>
@@ -731,6 +827,14 @@ export default function FeedbacksPage() {
                 }}
               >
                 Phản hồi
+              </button>
+              <button
+                className="btn btn--warning"
+                style={{ backgroundColor: '#d97706', color: 'white' }}
+                onClick={() => handleCreateMaintenance(selectedFeedback)}
+              >
+                <span className="btn__icon">{Icons.wrench}</span>
+                Tạo bảo trì
               </button>
             </div>
           </div>

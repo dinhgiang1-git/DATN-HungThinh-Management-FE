@@ -9,10 +9,10 @@ const VEHICLE_TYPES = [
   { value: 'MOTORBIKE', label: 'Xe máy', icon: '🏍️' },
   { value: 'CAR', label: 'Ô tô', icon: '🚗' },
   { value: 'BICYCLE', label: 'Xe đạp', icon: '🚲' },
-  { value: 'ELECTRIC_BIKE', label: 'Xe đạp điện', icon: '🛵' },
+  { value: 'ELECTRIC_BIKE', label: 'Xe máy điện', icon: '🛵' },
 ];
 
-const vehicleTypeLabel = { MOTORBIKE: 'Xe máy', CAR: 'Ô tô', BICYCLE: 'Xe đạp', ELECTRIC_BIKE: 'Xe đạp điện' };
+const vehicleTypeLabel = { MOTORBIKE: 'Xe máy', CAR: 'Ô tô', BICYCLE: 'Xe đạp', ELECTRIC_BIKE: 'Xe máy điện' };
 const vehicleTypeIcon = { MOTORBIKE: '🏍️', CAR: '🚗', BICYCLE: '🚲', ELECTRIC_BIKE: '🛵' };
 const vehicleTypeColor = {
   MOTORBIKE: { color: '#7c3aed', bg: '#ede9fe' },
