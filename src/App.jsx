@@ -2,11 +2,15 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { ToastContainer } from 'react-toastify';
 import 'react-toastify/dist/ReactToastify.css';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
+import { SseProvider } from './contexts/SseContext';
+
+// Admin pages
 import LoginPage from './pages/LoginPage';
 import DashboardPage from './pages/DashboardPage';
 import UsersPage from './pages/UsersPage';
 import ResidentsPage from './pages/ResidentsPage';
 import ApartmentsPage from './pages/ApartmentsPage';
+import BuildingReportsPage from './pages/BuildingReportsPage';
 import DevicesPage from './pages/DevicesPage';
 import NotificationsPage from './pages/NotificationsPage';
 import FeedbacksPage from './pages/FeedbacksPage';
@@ -15,35 +19,75 @@ import InvoicesPage from './pages/InvoicesPage';
 import ContractsPage from './pages/ContractsPage';
 import VehiclesPage from './pages/VehiclesPage';
 import AuditLogsPage from './pages/AuditLogsPage';
-import Layout from './components/layout/Layout';
 import PaymentResultPage from './pages/PaymentResultPage';
+import Layout from './components/layout/Layout';
 
-function PrivateRoute({ children }) {
-  const { isAuthenticated, loading } = useAuth();
+// Resident pages
+import ResidentLayout from './components/layout/ResidentLayout';
+import ResidentDashboardPage from './pages/resident/ResidentDashboardPage';
+import ResidentProfilePage from './pages/resident/ResidentProfilePage';
+import ResidentInvoicePage from './pages/resident/ResidentInvoicePage';
+import ResidentFeedbackPage from './pages/resident/ResidentFeedbackPage';
+import ResidentNotificationPage from './pages/resident/ResidentNotificationPage';
+import ResidentContractPage from './pages/resident/ResidentContractPage';
+import ResidentPaymentResultPage from './pages/resident/ResidentPaymentResultPage';
+import ResidentMembersPage from './pages/resident/ResidentMembersPage';
+import ResidentVehiclePage from './pages/resident/ResidentVehiclePage';
 
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center min-h-screen">
-        <div className="text-gray-500">Đang tải...</div>
-      </div>
-    );
+// ─── Route guards ───────────────────────────────────────────────────────────
+
+/** Chỉ cho phép khi chưa đăng nhập → nếu đã đăng nhập redirect theo role */
+function PublicRoute({ children }) {
+  const { isAuthenticated, loading, user } = useAuth();
+  if (loading) return <LoadingScreen />;
+  if (isAuthenticated) {
+    const role = user?.role;
+    return <Navigate to={role === 'RESIDENT' ? '/resident/dashboard' : '/'} replace />;
   }
-
-  return isAuthenticated ? children : <Navigate to="/login" replace />;
+  return children;
 }
 
-function PublicRoute({ children }) {
-  const { isAuthenticated, loading } = useAuth();
-
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center min-h-screen">
-        <div className="text-gray-500">Đang tải...</div>
-      </div>
-    );
+/** Chỉ cho phép ADMIN và TECHNICIAN (admin dashboard) */
+function AdminRoute({ children }) {
+  const { isAuthenticated, loading, user } = useAuth();
+  if (loading) return <LoadingScreen />;
+  if (!isAuthenticated) return <Navigate to="/login" replace />;
+  const role = user?.role;
+  if (role === 'RESIDENT') {
+    return <Navigate to="/resident/dashboard" replace />;
   }
+  return children;
+}
 
-  return isAuthenticated ? <Navigate to="/" replace /> : children;
+/** Chặn từng trang theo vai trò cụ thể trong khu admin shell */
+function RoleRoute({ children, roles, fallback = '/' }) {
+  const { isAuthenticated, loading, user } = useAuth();
+  if (loading) return <LoadingScreen />;
+  if (!isAuthenticated) return <Navigate to="/login" replace />;
+  if (!roles.includes(user?.role)) {
+    return <Navigate to={user?.role === 'RESIDENT' ? '/resident/dashboard' : fallback} replace />;
+  }
+  return children;
+}
+
+/** Chỉ cho phép RESIDENT (resident portal) */
+function ResidentRoute({ children }) {
+  const { isAuthenticated, loading, user } = useAuth();
+  if (loading) return <LoadingScreen />;
+  if (!isAuthenticated) return <Navigate to="/login" replace />;
+  const role = user?.role;
+  if (role !== 'RESIDENT') {
+    return <Navigate to="/" replace />;
+  }
+  return children;
+}
+
+function LoadingScreen() {
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '100vh' }}>
+      <div style={{ color: '#64748b' }}>Đang tải...</div>
+    </div>
+  );
 }
 
 /* Placeholder page for modules not yet built */
@@ -65,6 +109,7 @@ function ComingSoon({ title }) {
 function AppRoutes() {
   return (
     <Routes>
+      {/* ─── Public ─── */}
       <Route
         path="/login"
         element={
@@ -73,17 +118,20 @@ function AppRoutes() {
           </PublicRoute>
         }
       />
+
+      {/* ─── Admin / Technician routes ─── */}
       <Route
         element={
-          <PrivateRoute>
+          <AdminRoute>
             <Layout />
-          </PrivateRoute>
+          </AdminRoute>
         }
       >
         <Route index element={<DashboardPage />} />
         <Route path="users" element={<UsersPage />} />
         <Route path="residents" element={<ResidentsPage />} />
         <Route path="apartments" element={<ApartmentsPage />} />
+        <Route path="building-reports" element={<RoleRoute roles={['ADMIN']}><BuildingReportsPage /></RoleRoute>} />
         <Route path="devices" element={<DevicesPage />} />
         <Route path="notifications" element={<NotificationsPage />} />
         <Route path="feedbacks" element={<FeedbacksPage />} />
@@ -94,6 +142,31 @@ function AppRoutes() {
         <Route path="audit-logs" element={<AuditLogsPage />} />
         <Route path="payment-result" element={<PaymentResultPage />} />
       </Route>
+
+      {/* ─── Resident portal routes ─── */}
+      <Route
+        path="/resident"
+        element={
+          <ResidentRoute>
+            <SseProvider>
+              <ResidentLayout />
+            </SseProvider>
+          </ResidentRoute>
+        }
+      >
+        <Route index element={<Navigate to="dashboard" replace />} />
+        <Route path="dashboard" element={<ResidentDashboardPage />} />
+        <Route path="profile" element={<ResidentProfilePage />} />
+        <Route path="invoices" element={<ResidentInvoicePage />} />
+        <Route path="feedbacks" element={<ResidentFeedbackPage />} />
+        <Route path="notifications" element={<ResidentNotificationPage />} />
+        <Route path="contracts" element={<ResidentContractPage />} />
+        <Route path="payment-result" element={<ResidentPaymentResultPage />} />
+        <Route path="members" element={<ResidentMembersPage />} />
+        <Route path="vehicles" element={<ResidentVehiclePage />} />
+      </Route>
+
+      {/* Catch-all */}
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   );

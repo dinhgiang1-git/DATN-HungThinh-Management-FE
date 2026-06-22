@@ -1,18 +1,15 @@
 import { useEffect, useState } from 'react';
 import { Outlet } from 'react-router-dom';
-import Sidebar from './Sidebar';
-import Header from './Header';
-import AdminAiChat from '../common/AdminAiChat';
-import { useAuth } from '../../contexts/AuthContext';
+import ResidentSidebar from './ResidentSidebar';
+import ResidentHeader from './ResidentHeader';
 
 const isMobileViewport = () =>
   typeof window !== 'undefined' && window.matchMedia('(max-width: 768px)').matches;
 
-export default function Layout() {
+export default function ResidentLayout() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [isMobile, setIsMobile] = useState(isMobileViewport);
-  const { user } = useAuth();
 
   useEffect(() => {
     const media = window.matchMedia('(max-width: 768px)');
@@ -49,7 +46,7 @@ export default function Layout() {
 
   return (
     <div className={`layout ${sidebarCollapsed ? 'layout--collapsed' : ''} ${sidebarOpen ? 'layout--sidebar-open' : ''}`}>
-      <Sidebar collapsed={!isMobile && sidebarCollapsed} onNavigate={handleCloseSidebar} />
+      <ResidentSidebar collapsed={!isMobile && sidebarCollapsed} onNavigate={handleCloseSidebar} />
       <button
         type="button"
         className="layout__backdrop"
@@ -57,12 +54,11 @@ export default function Layout() {
         onClick={handleCloseSidebar}
       />
       <div className="layout__main">
-        <Header onToggleSidebar={handleToggleSidebar} />
+        <ResidentHeader onToggleSidebar={handleToggleSidebar} />
         <main className="layout__content">
           <Outlet />
         </main>
       </div>
-      {user?.role === 'ADMIN' && <AdminAiChat />}
     </div>
   );
 }

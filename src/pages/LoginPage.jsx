@@ -4,7 +4,28 @@ import { toast } from 'react-toastify';
 import { useAuth } from '../contexts/AuthContext';
 import authService from '../services/authService';
 import userService from '../services/userService';
+import residentService from '../services/residentService';
 import logo from '../assets/logo.jpg';
+
+const getEntityId = (data) => data?.id ?? data?.residentId ?? data?.userId ?? null;
+
+async function resolveResidentByUsername(username) {
+  try {
+    const res = await residentService.getByUsername(username);
+    const data = res.data?.data;
+    if (data) return data;
+  } catch (err) {
+    if (err.response?.status !== 404) {
+      console.warn('Could not fetch resident by username:', err);
+    }
+  }
+
+  const res = await residentService.getAll({ page: 0, size: 10000 });
+  const residents = res.data?.data?.content ?? [];
+  return residents.find((resident) =>
+    String(resident.userName ?? resident.username ?? '').toLowerCase() === username.toLowerCase()
+  );
+}
 
 export default function LoginPage() {
   const [username, setUsername] = useState('');
@@ -31,15 +52,40 @@ export default function LoginPage() {
       const response = await authService.login(username, password);
       if (response.status) {
         const { username: user, token, role } = response.data;
-        
-        // Lấy thông tin user để lấy ID
-        localStorage.setItem('token', token); // Tạm lưu token để gọi API userService
-        const userRes = await userService.getByUsername(user);
-        const userId = userRes.data?.data?.id;
+
+        // Tạm lưu token để gọi API tiếp theo
+        localStorage.setItem('token', token);
+
+        // Lấy ID người dùng theo role để tránh gọi endpoint admin-only
+        let userId = null;
+        try {
+          if (role === 'RESIDENT') {
+            const resident = await resolveResidentByUsername(user);
+            userId = getEntityId(resident);
+          } else {
+            const userRes = await userService.getByUsername(user);
+            userId = getEntityId(userRes.data?.data);
+          }
+        } catch (idErr) {
+          console.warn('Could not fetch user ID:', idErr);
+        }
+
+        if (!userId) {
+          localStorage.removeItem('token');
+          localStorage.removeItem('user');
+          toast.error('Không thể xác định thông tin tài khoản. Vui lòng liên hệ quản trị viên.');
+          return;
+        }
 
         login({ username: user, role, id: userId }, token);
         toast.success('Đăng nhập thành công!');
-        navigate('/');
+
+        // Redirect theo role
+        if (role === 'RESIDENT') {
+          navigate('/resident/dashboard');
+        } else {
+          navigate('/');
+        }
       } else {
         toast.error(response.message || 'Đăng nhập thất bại');
       }

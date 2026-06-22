@@ -1,7 +1,9 @@
 import { useState, useEffect, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import { toast } from 'react-toastify';
 import notificationService from '../services/notificationService';
 import apartmentService from '../services/apartmentService';
+import DropdownSelect from '../components/common/DropdownSelect';
 
 /* ─── constants ─── */
 const TARGET_TYPES = [
@@ -17,9 +19,9 @@ const targetLabel = {
 };
 
 const targetColor = {
-  ALL: { color: '#7c3aed', bg: '#ede9fe' },
-  BLOCK: { color: '#2563eb', bg: '#dbeafe' },
-  APARTMENT: { color: '#059669', bg: '#d1fae5' },
+  ALL: { color: '#5b21b6', bg: '#ddd6fe', border: '#c4b5fd' },
+  BLOCK: { color: '#1d4ed8', bg: '#dbeafe', border: '#bfdbfe' },
+  APARTMENT: { color: '#047857', bg: '#d1fae5', border: '#a7f3d0' },
 };
 
 const PAGE_SIZE = 10;
@@ -133,6 +135,15 @@ export default function NotificationsPage() {
   const [receiverSearchKeyword, setReceiverSearchKeyword] = useState('');
   const [receiverReadFilter, setReceiverReadFilter] = useState(null); // null=all, true=read, false=unread
 
+  useEffect(() => {
+    if (!modalOpen && !deleteModalOpen) return undefined;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [modalOpen, deleteModalOpen]);
+
   /* ─── fetch ─── */
   const fetchNotifications = useCallback(async () => {
     setLoading(true);
@@ -183,6 +194,16 @@ export default function NotificationsPage() {
   const currentUser = (() => {
     try { return JSON.parse(localStorage.getItem('user')); } catch { return null; }
   })();
+
+  const getTargetBadgeStyle = (targetType, extra = {}) => {
+    const tone = targetColor[targetType] || { color: '#475569', bg: '#f1f5f9', border: '#e2e8f0' };
+    return {
+      color: tone.color,
+      backgroundColor: tone.bg,
+      border: `1px solid ${tone.border}`,
+      ...extra,
+    };
+  };
 
   const openCreateModal = () => {
     setModalMode('create');
@@ -375,7 +396,7 @@ export default function NotificationsPage() {
 
   /* ─── render ─── */
   return (
-    <div className="page">
+    <div className="page notifications-page">
       {/* Header */}
       <div className="page__header">
         <div>
@@ -425,7 +446,7 @@ export default function NotificationsPage() {
       </div>
 
       {/* Table */}
-      <div className="page__table-wrapper">
+      <div className="page__table-wrapper notification-table">
         {loading ? (
           <div className="page__loading">
             <div className="spinner" />
@@ -436,7 +457,7 @@ export default function NotificationsPage() {
             <p>Không tìm thấy thông báo nào</p>
           </div>
         ) : (
-          <table className="data-table">
+          <table className="data-table notification-table__table">
             <thead>
               <tr>
                 <th className="data-table__th--id">ID</th>
@@ -449,47 +470,44 @@ export default function NotificationsPage() {
               </tr>
             </thead>
             <tbody>
-              {notifications.map((notif) => {
-                const tc = targetColor[notif.targetType] || { color: '#6b7280', bg: '#f3f4f6' };
-                return (
+              {notifications.map((notif) => (
                   <tr key={notif.notificationId}>
-                    <td className="data-table__cell--id">{notif.notificationId}</td>
-                    <td className="data-table__cell--bold">
+                    <td data-label="ID" className="data-table__cell--id">{notif.notificationId}</td>
+                    <td data-label="Tiêu đề" className="data-table__cell--bold">
                       <div
-                        style={{ maxWidth: '300px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}
+                        className="notification-table__title"
                         title={notif.title}
                       >
                         {notif.title}
                       </div>
                     </td>
-                    <td>
-                      <span className="badge" style={{ color: tc.color, backgroundColor: tc.bg }}>
+                    <td data-label="Đối tượng">
+                      <span className="badge" style={getTargetBadgeStyle(notif.targetType)}>
                         {targetLabel[notif.targetType] || notif.targetType}
                       </span>
                     </td>
-                    <td>{notif.sender?.fullName || '—'}</td>
-                    <td>{formatDateTime(notif.sendTime)}</td>
-                    <td>
+                    <td data-label="Người gửi">{notif.sender?.fullName || '—'}</td>
+                    <td data-label="Thời gian gửi">{formatDateTime(notif.sendTime)}</td>
+                    <td data-label="Người nhận">
                       <span className="badge" style={{ color: '#2563eb', backgroundColor: '#dbeafe' }}>
                         {notif.readCount ?? 0}/{notif.totalReceivers ?? 0} đã đọc
                       </span>
                     </td>
-                    <td>
+                    <td data-label="Thao tác">
                       <div className="action-btns">
-                        <button className="action-btn action-btn--view" title="Xem" onClick={() => openViewModal(notif)}>
+                        <button className="action-btn action-btn--view" data-tooltip="Xem chi tiết" aria-label="Xem chi tiết" onClick={() => openViewModal(notif)}>
                           {Icons.eye}
                         </button>
-                        <button className="action-btn action-btn--edit" title="Sửa" onClick={() => openEditModal(notif)}>
+                        <button className="action-btn action-btn--edit" data-tooltip="Chỉnh sửa" aria-label="Chỉnh sửa" onClick={() => openEditModal(notif)}>
                           {Icons.edit}
                         </button>
-                        <button className="action-btn action-btn--delete" title="Xóa" onClick={() => openDeleteModal(notif)}>
+                        <button className="action-btn action-btn--delete" data-tooltip="Xóa" aria-label="Xóa" onClick={() => openDeleteModal(notif)}>
                           {Icons.trash}
                         </button>
                       </div>
                     </td>
                   </tr>
-                );
-              })}
+              ))}
             </tbody>
           </table>
         )}
@@ -535,9 +553,9 @@ export default function NotificationsPage() {
       )}
 
       {/* Create / Edit Modal */}
-      {modalOpen && (modalMode === 'create' || modalMode === 'edit') && (
-        <div className="modal-overlay" onClick={() => setModalOpen(false)}>
-          <div className="modal" onClick={(e) => e.stopPropagation()}>
+      {modalOpen && (modalMode === 'create' || modalMode === 'edit') && createPortal((
+        <div className="modal-overlay notification-form-overlay" onClick={() => setModalOpen(false)}>
+          <div className="modal notification-form-modal" onClick={(e) => e.stopPropagation()}>
             <div className="modal__header">
               <h3 className="modal__title">
                 {modalMode === 'create' ? 'Gửi thông báo mới' : 'Chỉnh sửa thông báo'}
@@ -582,15 +600,16 @@ export default function NotificationsPage() {
                   <label className="form-label">
                     Đối tượng nhận <span className="form-required">*</span>
                   </label>
-                  <select
-                    className={`form-select ${formErrors.targetType ? 'form-input--error' : ''}`}
+                  <DropdownSelect
+                    className={formErrors.targetType ? 'form-input--error' : ''}
                     value={formData.targetType}
-                    onChange={(e) => handleFormChange('targetType', e.target.value)}
-                  >
-                    <option value="ALL">Toàn bộ cư dân</option>
-                    <option value="BLOCK">Theo Block</option>
-                    <option value="APARTMENT">Theo căn hộ</option>
-                  </select>
+                    onChange={(value) => handleFormChange('targetType', value)}
+                    options={[
+                      { value: 'ALL', label: 'Toàn bộ cư dân' },
+                      { value: 'BLOCK', label: 'Theo Block' },
+                      { value: 'APARTMENT', label: 'Theo căn hộ' },
+                    ]}
+                  />
                   {formErrors.targetType && <span className="form-error">{formErrors.targetType}</span>}
                 </div>
 
@@ -628,24 +647,24 @@ export default function NotificationsPage() {
                       </label>
                       {/* Block + Floor filters */}
                       <div style={{ display: 'flex', gap: '0.75rem', marginBottom: '0.75rem' }}>
-                        <select
-                          className="form-select"
+                        <DropdownSelect
                           value={aptFilterBlock}
-                          onChange={(e) => setAptFilterBlock(e.target.value)}
+                          onChange={(value) => setAptFilterBlock(value)}
                           style={{ flex: 1 }}
-                        >
-                          <option value="">Tất cả tòa nhà</option>
-                          {blocks.map(b => <option key={b} value={b}>Tòa {b}</option>)}
-                        </select>
-                        <select
-                          className="form-select"
+                          options={[
+                            { value: '', label: 'Tất cả tòa nhà' },
+                            ...blocks.map((block) => ({ value: block, label: `Tòa ${block}` })),
+                          ]}
+                        />
+                        <DropdownSelect
                           value={aptFilterFloor}
-                          onChange={(e) => setAptFilterFloor(e.target.value)}
+                          onChange={(value) => setAptFilterFloor(value)}
                           style={{ flex: 1 }}
-                        >
-                          <option value="">Tất cả tầng</option>
-                          {floors.map(f => <option key={f} value={f}>Tầng {f}</option>)}
-                        </select>
+                          options={[
+                            { value: '', label: 'Tất cả tầng' },
+                            ...floors.map((floor) => ({ value: floor, label: `Tầng ${floor}` })),
+                          ]}
+                        />
                       </div>
                       {/* Scrollable list */}
                       <div className="resident-select">
@@ -696,12 +715,12 @@ export default function NotificationsPage() {
             </form>
           </div>
         </div>
-      )}
+      ), document.body)}
 
       {/* View Modal */}
-      {modalOpen && modalMode === 'view' && selectedNotification && (
-        <div className="modal-overlay" onClick={() => setModalOpen(false)}>
-          <div className="modal modal--lg" onClick={(e) => e.stopPropagation()}>
+      {modalOpen && modalMode === 'view' && selectedNotification && createPortal((
+        <div className="modal-overlay notification-detail-overlay" onClick={() => setModalOpen(false)}>
+          <div className="modal modal--lg notification-detail-modal" onClick={(e) => e.stopPropagation()}>
             {/* Gradient header band */}
             <div className="notif-detail-header">
               <div className="notif-detail-header__icon">
@@ -741,11 +760,7 @@ export default function NotificationsPage() {
                     <span className="notif-detail-info__value">
                       <span
                         className="badge"
-                        style={{
-                          color: targetColor[selectedNotification.targetType]?.color || '#6b7280',
-                          backgroundColor: targetColor[selectedNotification.targetType]?.bg || '#f3f4f6',
-                          fontSize: '11px',
-                        }}
+                        style={getTargetBadgeStyle(selectedNotification.targetType, { fontSize: '11px' })}
                       >
                         {targetLabel[selectedNotification.targetType] || selectedNotification.targetType}
                       </span>
@@ -852,7 +867,7 @@ export default function NotificationsPage() {
                   </div>
                 </div>
 
-                <div style={{ border: '1px solid #e2e8f0', borderRadius: '0.5rem', overflow: 'hidden' }}>
+                <div className="rcv-table-wrap">
                   {receiverLoading ? (
                     <div style={{ padding: '2rem', textAlign: 'center', color: '#94a3b8' }}>
                       <div className="spinner" style={{ margin: '0 auto 0.5rem' }} />
@@ -875,9 +890,9 @@ export default function NotificationsPage() {
                       <tbody>
                         {receivers.map((r) => (
                           <tr key={r.receiverNotificationId}>
-                            <td className="rcv-table__name">{r.resident?.fullName || '—'}</td>
-                            <td className="rcv-table__email">{r.resident?.email || '—'}</td>
-                            <td>
+                            <td data-label="Tên cư dân" className="rcv-table__name">{r.resident?.fullName || '—'}</td>
+                            <td data-label="Email" className="rcv-table__email">{r.resident?.email || '—'}</td>
+                            <td data-label="Trạng thái">
                               <span
                                 className="badge"
                                 style={{
@@ -889,7 +904,7 @@ export default function NotificationsPage() {
                                 {r.isRead ? 'Đã đọc' : 'Chưa đọc'}
                               </span>
                             </td>
-                            <td style={{ fontSize: '12px', color: '#64748b' }}>{r.readAt ? formatDateTime(r.readAt) : '—'}</td>
+                            <td data-label="Đọc lúc" className="rcv-table__read-at">{r.readAt ? formatDateTime(r.readAt) : '—'}</td>
                           </tr>
                         ))}
                       </tbody>
@@ -898,17 +913,13 @@ export default function NotificationsPage() {
                 </div>
                 {/* Receiver pagination */}
                 {receiverTotalPages > 1 && (
-                  <div style={{
-                    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                    padding: '0.75rem 0', fontSize: '0.82rem', color: '#64748b'
-                  }}>
+                  <div className="rcv-pagination">
                     <span>Trang {receiverPage + 1} / {receiverTotalPages}</span>
-                    <div style={{ display: 'flex', gap: '0.5rem' }}>
+                    <div className="rcv-pagination__btns">
                       <button
                         className="btn btn--ghost btn--sm"
                         disabled={receiverPage === 0}
                         onClick={() => handleReceiverPageChange(receiverPage - 1)}
-                        style={{ padding: '0.25rem 0.75rem', fontSize: '0.82rem' }}
                       >
                         ← Trước
                       </button>
@@ -916,7 +927,6 @@ export default function NotificationsPage() {
                         className="btn btn--ghost btn--sm"
                         disabled={receiverPage >= receiverTotalPages - 1}
                         onClick={() => handleReceiverPageChange(receiverPage + 1)}
-                        style={{ padding: '0.25rem 0.75rem', fontSize: '0.82rem' }}
                       >
                         Sau →
                       </button>
@@ -941,12 +951,12 @@ export default function NotificationsPage() {
             </div>
           </div>
         </div>
-      )}
+      ), document.body)}
 
       {/* Delete Modal */}
-      {deleteModalOpen && deleteTarget && (
-        <div className="modal-overlay" onClick={() => setDeleteModalOpen(false)}>
-          <div className="modal modal--sm" onClick={(e) => e.stopPropagation()}>
+      {deleteModalOpen && deleteTarget && createPortal((
+        <div className="modal-overlay notification-delete-overlay" onClick={() => setDeleteModalOpen(false)}>
+          <div className="modal modal--sm notification-delete-modal" onClick={(e) => e.stopPropagation()}>
             <div className="modal__header modal__header--danger">
               <h3 className="modal__title">Xác nhận xóa</h3>
               <button className="modal__close" onClick={() => setDeleteModalOpen(false)}>
@@ -977,7 +987,7 @@ export default function NotificationsPage() {
             </div>
           </div>
         </div>
-      )}
+      ), document.body)}
     </div>
   );
 }

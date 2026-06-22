@@ -1,4 +1,5 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
+import { createPortal } from 'react-dom';
 import { exportToExcel } from '../utils/exportExcel';
 import { toast } from 'react-toastify';
 import DatePicker, { registerLocale } from 'react-datepicker';
@@ -9,12 +10,11 @@ import apartmentService from '../services/apartmentService';
 import tableFeeService from '../services/tableFeeService';
 import tableElectricTierService from '../services/tableElectricTierService';
 import paymentService from '../services/paymentService';
-import evnService from '../services/evnService';
-import waterService from '../services/waterService';
 import vehicleService from '../services/vehicleService';
+import meterReadingService from '../services/meterReadingService';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
-import SearchableSelect from '../components/common/SearchableSelect';
+import DropdownSelect from '../components/common/DropdownSelect';
 
 registerLocale('vi', vi);
 
@@ -32,6 +32,11 @@ const statusColor = {
   UNPAID: { color: '#dc2626', bg: '#fee2e2' },
   OVERDUE: { color: '#c2410c', bg: '#ffedd5' },
 };
+const apartmentStatusLabel = {
+  OCCUPIED: 'Đang ở',
+  VACANT: 'Trống',
+  UNDER_MAINTENANCE: 'Đang bảo trì',
+};
 
 const paymentStatusLabel = { PENDING: 'Đang xử lý', SUCCESS: 'Thành công', FAILED: 'Thất bại' };
 const paymentStatusColor = {
@@ -41,6 +46,13 @@ const paymentStatusColor = {
 };
 
 const PAGE_SIZE = 10;
+const MODAL_APARTMENT_PAGE_SIZE = 8;
+const METER_APARTMENT_PAGE_SIZE = 12;
+const METER_APARTMENT_MODES = [
+  { value: 'NEED_READING', label: 'Cần ghi' },
+  { value: 'RECORDED', label: 'Đã ghi' },
+  { value: 'ALL', label: 'Tất cả' },
+];
 
 /* ─── icons ─── */
 const Icons = {
@@ -55,6 +67,15 @@ const Icons = {
   refresh: (<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><polyline points="23 4 23 10 17 10" /><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10" /></svg>),
   fee: (<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><rect x="2" y="3" width="20" height="18" rx="2" /><line x1="2" y1="9" x2="22" y2="9" /><line x1="9" y1="3" x2="9" y2="21" /></svg>),
   momo: (<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 4H3a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h18a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2z" /><path d="M12 10v4" /><path d="M10 12h4" /><line x1="1" y1="10" x2="23" y2="10" /></svg>),
+  check: (<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><polyline points="20 6 9 17 4 12" /></svg>),
+  home: (<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 10.5 12 3l9 7.5" /><path d="M5 10v10h14V10" /><path d="M9 20v-6h6v6" /></svg>),
+  calendar: (<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><rect x="3" y="4" width="18" height="18" rx="2" /><line x1="16" y1="2" x2="16" y2="6" /><line x1="8" y1="2" x2="8" y2="6" /><line x1="3" y1="10" x2="21" y2="10" /></svg>),
+  zap: (<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M13 2 4 14h7l-1 8 10-13h-7l0-7Z" /></svg>),
+  droplet: (<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2.5S5 10 5 15a7 7 0 0 0 14 0c0-5-7-12.5-7-12.5Z" /></svg>),
+  image: (<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="18" height="16" rx="2" /><circle cx="8.5" cy="9.5" r="1.5" /><path d="m21 15-5-5L5 20" /></svg>),
+  note: (<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 4h16v16H4z" /><path d="M8 8h8" /><path d="M8 12h8" /><path d="M8 16h5" /></svg>),
+  clipboard: (<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 4h6l1 2h3v15H5V6h3l1-2Z" /><path d="M9 11h6" /><path d="M9 15h6" /></svg>),
+  chevronDown: (<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><polyline points="6 9 12 15 18 9" /></svg>),
 };
 
 /* ─── helpers ─── */
@@ -126,7 +147,150 @@ const parseInputCurrency = (val) => {
   return String(val).replace(/\D/g, '');
 };
 
+const createOtherFeeItem = (description = '', amount = '') => ({
+  id: `other-fee-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+  description,
+  amount: amount ? String(amount).replace(/\D/g, '') : '',
+});
+
+const normalizeOtherFeeItems = (amount, description) => {
+  const normalizedAmount = amount ? String(amount).replace(/\D/g, '') : '';
+  const normalizedDescription = description || '';
+  if (!normalizedAmount && !normalizedDescription.trim()) {
+    return [createOtherFeeItem()];
+  }
+  return [createOtherFeeItem(normalizedDescription, normalizedAmount)];
+};
+
+const summarizeOtherFeeItems = (items = []) => {
+  const normalizedItems = (Array.isArray(items) ? items : [])
+    .map((item) => ({
+      ...item,
+      description: item.description?.trim() || '',
+      amount: Number(String(item.amount || '').replace(/\D/g, '')) || 0,
+    }))
+    .filter((item) => item.description || item.amount > 0);
+
+  return {
+    items: normalizedItems,
+    total: normalizedItems.reduce((sum, item) => sum + item.amount, 0),
+    description: normalizedItems
+      .map((item, index) => `${index + 1}. ${item.description || 'Phí phát sinh'}: ${formatInputCurrency(item.amount)}đ`)
+      .join('\n'),
+  };
+};
+
+const buildOtherFeeFields = (items = []) => {
+  const safeItems = Array.isArray(items) && items.length ? items : [createOtherFeeItem()];
+  const summary = summarizeOtherFeeItems(safeItems);
+  return {
+    otherFeeItems: safeItems,
+    otherFee: summary.total > 0 ? String(summary.total) : '',
+    descriptionOtherFee: summary.description,
+  };
+};
+
+const getFormOtherFeeSummary = (data) => {
+  const items = Array.isArray(data?.otherFeeItems) && data.otherFeeItems.length
+    ? data.otherFeeItems
+    : normalizeOtherFeeItems(data?.otherFee, data?.descriptionOtherFee);
+  return summarizeOtherFeeItems(items);
+};
+
+const toPreTaxFeeString = (fee, taxMultiplier) => {
+  if (fee == null || fee === '') return '';
+  const amount = Number(fee);
+  if (!Number.isFinite(amount)) return '';
+  return String(Math.round(amount / taxMultiplier));
+};
+
+const formatBillingPeriodDisplay = (value) => {
+  if (!value) return '';
+  if (typeof value === 'string' && /^\d{4}-\d{2}$/.test(value)) {
+    const [year, month] = value.split('-');
+    return `${month}/${year}`;
+  }
+  if (typeof value === 'string' && /^\d{1,2}\/\d{4}$/.test(value)) {
+    const [month, year] = value.split('/');
+    return `${String(month).padStart(2, '0')}/${year}`;
+  }
+  return value;
+};
+
+const normalizeBillingPeriodInput = (value) => {
+  const digits = String(value || '').replace(/\D/g, '').slice(0, 6);
+  if (digits.length <= 2) return digits;
+  return `${digits.slice(0, 2)}/${digits.slice(2)}`;
+};
+
+const parseBillingPeriodInput = (value) => {
+  const match = String(value || '').trim().match(/^(\d{1,2})\/(\d{4})$/);
+  if (!match) return '';
+  const month = Number(match[1]);
+  if (month < 1 || month > 12) return '';
+  return `${match[2]}-${String(month).padStart(2, '0')}`;
+};
+
+const billingPeriodFromDate = (dateValue) => {
+  if (!dateValue) return new Date().toISOString().slice(0, 7);
+  if (Array.isArray(dateValue)) {
+    const [year, month] = dateValue;
+    return `${year}-${String(month).padStart(2, '0')}`;
+  }
+  if (typeof dateValue === 'string' && /^\d{2}\/\d{2}\/\d{4}$/.test(dateValue)) {
+    const [, month, year] = dateValue.split('/');
+    return `${year}-${month}`;
+  }
+  if (typeof dateValue === 'string') return dateValue.slice(0, 7);
+  try {
+    return `${dateValue.getFullYear()}-${String(dateValue.getMonth() + 1).padStart(2, '0')}`;
+  } catch {
+    return new Date().toISOString().slice(0, 7);
+  }
+};
+
+const billingPeriodStartDate = (billingPeriod, fallbackDate) => {
+  const period = billingPeriod || billingPeriodFromDate(fallbackDate);
+  if (typeof period === 'string' && /^\d{4}-\d{2}$/.test(period)) {
+    return `${period}-01`;
+  }
+  return fallbackDate ? billingPeriodFromDate(fallbackDate) + '-01' : '';
+};
+
+const createBatchFeeDraft = (fee = {}) => ({
+  electricFee: fee?.electricFee != null ? String(fee.electricFee) : '',
+  waterFee: fee?.waterFee != null ? String(fee.waterFee) : '',
+  managementFee: fee?.managementFee != null ? String(fee.managementFee) : '',
+  motorbikeParkingFee: fee?.motorbikeParkingFee != null ? String(fee.motorbikeParkingFee) : '',
+  carParkingFee: fee?.carParkingFee != null ? String(fee.carParkingFee) : '',
+  bicycleParkingFee: fee?.bicycleParkingFee != null ? String(fee.bicycleParkingFee) : '',
+  electricMotorbikeParkingFee: fee?.electricMotorbikeParkingFee != null ? String(fee.electricMotorbikeParkingFee) : '',
+  otherFee: fee?.otherFee != null ? String(fee.otherFee) : '',
+  descriptionOtherFee: fee?.descriptionOtherFee || '',
+  otherFeeItems: normalizeOtherFeeItems(fee?.otherFee, fee?.descriptionOtherFee),
+  useTieredElectric: !!fee?.useTieredElectric,
+});
+
+const getResidentId = (resident) => resident?.residentId ?? resident?.id;
+const getApartmentOwner = (apt) => {
+  const residents = apt?.residents || [];
+  return residents.find((r) => String(getResidentId(r)) === String(apt?.ownerId))
+    || residents.find((r) => r.relationshipType === 'OWNER');
+};
+const getApartmentTenant = (apt) => apt?.residents?.find((r) => r.relationshipType === 'TENANT');
+const getResidentPhone = (resident) => resident?.phone || resident?.phoneNumber;
+const isMeterEligibleApartment = (apt) => Boolean(getApartmentOwner(apt) || getApartmentTenant(apt));
+const getInvoiceApartmentId = (invoice) => invoice?.apartment?.id ?? invoice?.apartmentId ?? invoice?.apartment?.apartmentId;
+const getMeterReadingApartmentId = (reading) => reading?.apartment?.id ?? reading?.apartmentId ?? reading?.apartment?.apartmentId;
+
 export default function InvoicesPage() {
+  const currentUser = useMemo(() => {
+    try { return JSON.parse(localStorage.getItem('user') || 'null'); } catch { return null; }
+  }, []);
+  const userRole = currentUser?.role || currentUser?.userRole || 'ADMIN';
+  const isTechnician = userRole === 'TECHNICIAN';
+  const canManageInvoices = userRole === 'ADMIN';
+
   /* ─── state ─── */
   const [invoices, setInvoices] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -153,6 +317,7 @@ export default function InvoicesPage() {
   const [modalOpen, setModalOpen] = useState(false);
   const [modalMode, setModalMode] = useState('create'); // create | edit | view
   const [selectedInvoice, setSelectedInvoice] = useState(null);
+  const [invoiceStep, setInvoiceStep] = useState(0);
   const [formData, setFormData] = useState({
     invoiceNumber: '',
     dueDate: '',
@@ -162,10 +327,15 @@ export default function InvoicesPage() {
     parkingFee: '',
     otherFee: '',
     descriptionOtherFee: '',
+    otherFeeItems: [createOtherFeeItem()],
     apartmentId: '',
     invoiceStatus: 'UNPAID',
     electricQuantity: '',
+    electricPreviousReading: '',
+    electricCurrentReading: '',
     waterQuantity: '',
+    waterPreviousReading: '',
+    waterCurrentReading: '',
     electricStartDate: '',
     electricEndDate: '',
     numberOfHouseholds: '1',
@@ -173,14 +343,46 @@ export default function InvoicesPage() {
   const [isCalculatingElectric, setIsCalculatingElectric] = useState(false);
   const [evnMockInfo, setEvnMockInfo] = useState({ loading: false, data: null, error: null });
   const [waterMockInfo, setWaterMockInfo] = useState({ loading: false, data: null, error: null });
+  const [meterPreviewInfo, setMeterPreviewInfo] = useState({ loading: false, data: null, error: null });
+  const [electricMeterSource, setElectricMeterSource] = useState('MOCK_API');
+  const [waterMeterSource, setWaterMeterSource] = useState('MOCK_API');
+  const [mockMeterReloadKey, setMockMeterReloadKey] = useState(0);
   const [parkingFeeInfo, setParkingFeeInfo] = useState({ loading: false, vehicles: null, error: null });
   const [formErrors, setFormErrors] = useState({});
   const [submitting, setSubmitting] = useState(false);
+
+  // Manual meter readings
+  const [meterTab, setMeterTab] = useState('electric'); // 'electric' | 'water'
+  const [meterReadings, setMeterReadings] = useState([]);
+  const [meterReadingsLoading, setMeterReadingsLoading] = useState(false);
+  const [readingSubmitting, setReadingSubmitting] = useState(false);
+  const [meterEntryModalOpen, setMeterEntryModalOpen] = useState(false);
+  const [readingForm, setReadingForm] = useState({
+    apartmentId: '',
+    billingPeriod: new Date().toISOString().slice(0, 7),
+    electricCurrentReading: '',
+    waterCurrentReading: '',
+    note: '',
+    electricFile: null,
+    waterFile: null,
+  });
+  const [billingPeriodInput, setBillingPeriodInput] = useState(formatBillingPeriodDisplay(new Date().toISOString().slice(0, 7)));
 
   // Apartments
   const [apartments, setApartments] = useState([]);
   const [aptFilterBlock, setAptFilterBlock] = useState('');
   const [aptFilterFloor, setAptFilterFloor] = useState('');
+  const [aptFilterStatus, setAptFilterStatus] = useState('');
+  const [meterAptSearch, setMeterAptSearch] = useState('');
+  const [meterAptMode, setMeterAptMode] = useState('NEED_READING');
+  const [meterAptPage, setMeterAptPage] = useState(0);
+  const [meterFilterMenu, setMeterFilterMenu] = useState(null);
+  const [aptModalSearch, setAptModalSearch] = useState('');
+  const [aptModalPage, setAptModalPage] = useState(0);
+  const [periodInvoices, setPeriodInvoices] = useState([]);
+  const [periodInvoicesLoading, setPeriodInvoicesLoading] = useState(false);
+  const [periodMeterReadings, setPeriodMeterReadings] = useState([]);
+  const [periodMeterReadingsLoading, setPeriodMeterReadingsLoading] = useState(false);
 
   // Delete
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
@@ -190,7 +392,7 @@ export default function InvoicesPage() {
   // Payment method modal
   const [payModalOpen, setPayModalOpen] = useState(false);
   const [payInvoiceId, setPayInvoiceId] = useState(null);
-  const [payMethod, setPayMethod] = useState(''); // MOMO, CASH, BANK_TRANSFER
+  const [payMethod, setPayMethod] = useState(''); // MOMO, VNPAY, CASH, BANK_TRANSFER
   const [payNote, setPayNote] = useState('');
   const [payTxnNo, setPayTxnNo] = useState('');
   const [payBank, setPayBank] = useState('');
@@ -200,6 +402,19 @@ export default function InvoicesPage() {
   const [feeDeleteModalOpen, setFeeDeleteModalOpen] = useState(false);
   const [feeDeleteTargetIdx, setFeeDeleteTargetIdx] = useState(null);
   const [feeDeleting, setFeeDeleting] = useState(false);
+
+  useEffect(() => {
+    if (
+      !(modalOpen && ['create', 'edit', 'view'].includes(modalMode))
+      && !deleteModalOpen
+      && !feeDeleteModalOpen
+    ) return undefined;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [modalOpen, modalMode, deleteModalOpen, feeDeleteModalOpen]);
 
   // Table Fee
   const [tableFees, setTableFees] = useState([]);
@@ -217,7 +432,6 @@ export default function InvoicesPage() {
   // Tiered Electric
   const [electricTiers, setElectricTiers] = useState([]);
   const [useTieredElectric, setUseTieredElectric] = useState(false);
-  const [tierSubmitting, setTierSubmitting] = useState(false);
   const [editingTierId, setEditingTierId] = useState(null); // 'new' or tier.id
   const [tierForm, setTierForm] = useState({ tierOrder: '', limitValue: '', unitPrice: '' });
 
@@ -229,9 +443,33 @@ export default function InvoicesPage() {
   const [batchSubmitting, setBatchSubmitting] = useState(false);
   const [batchFilterBlock, setBatchFilterBlock] = useState('');
   const [batchFilterFloor, setBatchFilterFloor] = useState('');
+  const [batchInvoiceFilter, setBatchInvoiceFilter] = useState('ALL');
+  const [batchFeeDraft, setBatchFeeDraft] = useState(createBatchFeeDraft());
+
+  useEffect(() => {
+    if (!batchModalOpen) return;
+    setBatchFeeDraft(createBatchFeeDraft(tableFees[batchFeeIndex] || {}));
+  }, [batchModalOpen, batchFeeIndex, tableFees]);
+
+  const eligibleBatchApartments = useMemo(
+    () => apartments.filter((apt) => getApartmentOwner(apt) || getApartmentTenant(apt)),
+    [apartments]
+  );
+
+  const scopedBatchApartments = useMemo(
+    () => eligibleBatchApartments.filter((apt) =>
+      (!batchFilterBlock || apt.block === batchFilterBlock)
+      && (!batchFilterFloor || String(apt.floor) === String(batchFilterFloor))
+    ),
+    [eligibleBatchApartments, batchFilterBlock, batchFilterFloor]
+  );
 
   /* ─── fetch ─── */
   const fetchInvoices = useCallback(async () => {
+    if (!canManageInvoices) {
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     try {
       const params = { page, size: PAGE_SIZE, sortBy: 'id', direction: sortDirection };
@@ -248,7 +486,7 @@ export default function InvoicesPage() {
     } finally {
       setLoading(false);
     }
-  }, [page, filterStatus, sortDirection, searchKeyword]);
+  }, [page, filterStatus, sortDirection, searchKeyword, canManageInvoices]);
 
   const fetchApartments = useCallback(async () => {
     try {
@@ -260,6 +498,10 @@ export default function InvoicesPage() {
   }, []);
 
   const fetchTableFees = useCallback(async () => {
+    if (!canManageInvoices) {
+      setTableFeeLoading(false);
+      return;
+    }
     setTableFeeLoading(true);
     try {
       const res = await tableFeeService.getAll();
@@ -269,7 +511,7 @@ export default function InvoicesPage() {
     } finally {
       setTableFeeLoading(false);
     }
-  }, []);
+  }, [canManageInvoices]);
 
   const fetchGlobalTiers = useCallback(async () => {
     try {
@@ -281,66 +523,149 @@ export default function InvoicesPage() {
     }
   }, []);
 
-  useEffect(() => {
-    const activeFee = tableFees.length > 0 ? tableFees[selectedFeeIndex] : null;
-    const isTiered = activeFee?.useTieredElectric;
-    
-    if (modalOpen && modalMode === 'create' && isTiered && formData.apartmentId) {
-      const apt = apartments.find(a => String(a.id) === String(formData.apartmentId));
-      if (apt && apt.ownerId) {
-        setEvnMockInfo({ loading: true, data: null, error: null });
-        evnService.getBillByResidentId(apt.ownerId)
-          .then(res => {
-            if (res.data?.status) {
-              const d = res.data.data;
-              setEvnMockInfo({ loading: false, data: d, error: null });
-              setFormData(prev => ({ ...prev, electricQuantity: String(d.kwhConsumed) }));
-              toast.success('Đã tự động lấy biểu điện EVN (Mock)');
-            } else {
-              setEvnMockInfo({ loading: false, data: null, error: res.data?.message || 'Không lấy được EVN' });
-            }
-          })
-          .catch(err => {
-            setEvnMockInfo({ loading: false, data: null, error: 'Chưa có hóa đơn EVN' });
-          });
-      } else {
-         setEvnMockInfo({ loading: false, data: null, error: 'Căn hộ chưa có chủ sở hữu (residentId)' });
-      }
-    } else {
-      setEvnMockInfo({ loading: false, data: null, error: null });
+  const fetchMeterReadings = useCallback(async (apartmentId = readingForm.apartmentId) => {
+    setMeterReadingsLoading(true);
+    try {
+      const params = { page: 0, size: 20 };
+      if (apartmentId) params.apartmentId = apartmentId;
+      const res = await meterReadingService.getAll(params);
+      setMeterReadings(res.data?.data?.content || []);
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Không thể tải lịch sử chỉ số');
+    } finally {
+      setMeterReadingsLoading(false);
     }
-  }, [modalOpen, modalMode, formData.apartmentId, tableFees, selectedFeeIndex, apartments]);
+  }, [readingForm.apartmentId]);
 
-  // Fetch water mock data when apartment changes
+  const applyInvoiceMeterSnapshot = useCallback((snapshot, selectedActiveFee, sourceLabel) => {
+    setMeterPreviewInfo({ loading: false, data: snapshot, error: null });
+    setEvnMockInfo({
+      loading: false,
+      data: {
+        kwhConsumed: snapshot.electricQuantity,
+        billingPeriod: snapshot.billingPeriod,
+        sourceLabel,
+      },
+      error: null,
+    });
+    setWaterMockInfo({
+      loading: false,
+      data: {
+        cubicMeterConsumed: snapshot.waterQuantity,
+        billingPeriod: snapshot.billingPeriod,
+        sourceLabel,
+      },
+      error: null,
+    });
+    setFormData((prev) => {
+      const electricQty = Number(snapshot.electricQuantity) || 0;
+      const waterQty = Number(snapshot.waterQuantity) || 0;
+      const electricFee = selectedActiveFee && !selectedActiveFee.useTieredElectric && selectedActiveFee.electricFee > 0 && electricQty > 0
+        ? String(electricQty * Number(selectedActiveFee.electricFee))
+        : (selectedActiveFee?.useTieredElectric ? '' : prev.electricFee);
+      const waterFee = selectedActiveFee && selectedActiveFee.waterFee > 0 && waterQty > 0
+        ? String(waterQty * Number(selectedActiveFee.waterFee))
+        : prev.waterFee;
+
+      return {
+        ...prev,
+        electricPreviousReading: snapshot.electricPreviousReading != null ? String(snapshot.electricPreviousReading) : '',
+        electricCurrentReading: snapshot.electricCurrentReading != null ? String(snapshot.electricCurrentReading) : '',
+        electricQuantity: snapshot.electricQuantity != null ? String(snapshot.electricQuantity) : '',
+        waterPreviousReading: snapshot.waterPreviousReading != null ? String(snapshot.waterPreviousReading) : '',
+        waterCurrentReading: snapshot.waterCurrentReading != null ? String(snapshot.waterCurrentReading) : '',
+        waterQuantity: snapshot.waterQuantity != null ? String(snapshot.waterQuantity) : '',
+        electricFee,
+        waterFee,
+      };
+    });
+  }, []);
+
   useEffect(() => {
-    if (modalOpen && modalMode === 'create' && formData.apartmentId) {
-      const apt = apartments.find(a => String(a.id) === String(formData.apartmentId));
-      if (apt && apt.ownerId) {
-        setWaterMockInfo({ loading: true, data: null, error: null });
-        waterService.getBillByResidentId(apt.ownerId)
-          .then(res => {
-            if (res.data?.status) {
-              const d = res.data.data;
-              setWaterMockInfo({ loading: false, data: d, error: null });
-              setFormData(prev => {
-                const qty = d.cubicMeterConsumed;
-                const fee = (activeFee && activeFee.waterFee > 0 && qty > 0) ? String(qty * Number(activeFee.waterFee)) : '';
-                return { ...prev, waterQuantity: String(qty), waterFee: fee };
-              });
-            } else {
-              setWaterMockInfo({ loading: false, data: null, error: res.data?.message || 'Không lấy được dữ liệu nước' });
-            }
-          })
-          .catch(err => {
-            setWaterMockInfo({ loading: false, data: null, error: 'Chưa có hóa đơn nước' });
-          });
-      } else {
-        setWaterMockInfo({ loading: false, data: null, error: 'Căn hộ chưa có chủ sở hữu' });
-      }
-    } else {
+    if (!modalOpen || modalMode !== 'create' || !formData.apartmentId || !canManageInvoices) {
+      setMeterPreviewInfo({ loading: false, data: null, error: null });
+      setEvnMockInfo({ loading: false, data: null, error: null });
       setWaterMockInfo({ loading: false, data: null, error: null });
+      return;
     }
-  }, [modalOpen, modalMode, formData.apartmentId, apartments]);
+
+    let cancelled = false;
+    setMeterPreviewInfo({ loading: true, data: null, error: null });
+    setEvnMockInfo({ loading: true, data: null, error: null });
+    setWaterMockInfo({ loading: true, data: null, error: null });
+    const selectedActiveFee = tableFees?.[selectedFeeIndex] || tableFees?.[0] || null;
+    const targetBillingPeriod = billingPeriodFromDate(formData.dueDate);
+
+    Promise.all([
+      meterReadingService.preview(formData.apartmentId, targetBillingPeriod).then((res) => res.data?.data || null),
+      meterReadingService.getAll({ page: 0, size: 100, apartmentId: formData.apartmentId })
+        .then((res) => res.data?.data?.content || []),
+    ])
+      .then(([mockSnapshot, readings]) => {
+        if (cancelled) return;
+        if (!mockSnapshot) {
+          const message = 'Không lấy được chỉ số điện nước';
+          setMeterPreviewInfo({ loading: false, data: null, error: message });
+          setEvnMockInfo({ loading: false, data: null, error: message });
+          setWaterMockInfo({ loading: false, data: null, error: message });
+          return;
+        }
+
+        const manualReadings = readings.filter((item) => item.source === 'MANUAL');
+        const findManualReading = (hasReading) => manualReadings.find((item) => item.billingPeriod === targetBillingPeriod && hasReading(item))
+          || manualReadings
+            .filter((item) => item.billingPeriod && item.billingPeriod < targetBillingPeriod && hasReading(item))
+            .sort((a, b) => b.billingPeriod.localeCompare(a.billingPeriod) || (b.meterReadingId || 0) - (a.meterReadingId || 0))[0];
+        const electricManual = findManualReading((item) => item.electricCurrentReading != null);
+        const waterManual = findManualReading((item) => item.waterCurrentReading != null);
+        const electricManualReady = !!electricManual;
+        const waterManualReady = !!waterManual;
+        const manualNote = (manual) => manual
+          ? (manual.billingPeriod === targetBillingPeriod
+            ? `Ghi thủ công kỳ ${formatBillingPeriodDisplay(manual.billingPeriod)}`
+            : `Ghi thủ công mới nhất (${formatBillingPeriodDisplay(manual.billingPeriod)})`)
+          : '';
+
+        const snapshot = {
+          apartmentId: formData.apartmentId,
+          billingPeriod: targetBillingPeriod,
+          electricPreviousReading: electricMeterSource === 'MANUAL' && electricManualReady ? electricManual.electricPreviousReading : mockSnapshot.electricPreviousReading,
+          electricCurrentReading: electricMeterSource === 'MANUAL' && electricManualReady ? electricManual.electricCurrentReading : mockSnapshot.electricCurrentReading,
+          electricQuantity: electricMeterSource === 'MANUAL' && electricManualReady ? electricManual.electricQuantity : mockSnapshot.electricQuantity,
+          waterPreviousReading: waterMeterSource === 'MANUAL' && waterManualReady ? waterManual.waterPreviousReading : mockSnapshot.waterPreviousReading,
+          waterCurrentReading: waterMeterSource === 'MANUAL' && waterManualReady ? waterManual.waterCurrentReading : mockSnapshot.waterCurrentReading,
+          waterQuantity: waterMeterSource === 'MANUAL' && waterManualReady ? waterManual.waterQuantity : mockSnapshot.waterQuantity,
+        };
+        applyInvoiceMeterSnapshot(snapshot, selectedActiveFee, `Mock API kỳ ${formatBillingPeriodDisplay(mockSnapshot.billingPeriod)}`);
+
+        if (electricMeterSource === 'MANUAL') {
+          if (electricManualReady) {
+            setEvnMockInfo({ loading: false, data: { kwhConsumed: electricManual.electricQuantity, billingPeriod: electricManual.billingPeriod, sourceLabel: manualNote(electricManual) }, error: null });
+          } else {
+            setEvnMockInfo({ loading: false, data: null, error: 'Kĩ thuật viên chưa ghi lại dữ liệu điện' });
+            setFormData((prev) => ({ ...prev, electricCurrentReading: '', electricQuantity: '', electricFee: '' }));
+          }
+        }
+
+        if (waterMeterSource === 'MANUAL') {
+          if (waterManualReady) {
+            setWaterMockInfo({ loading: false, data: { cubicMeterConsumed: waterManual.waterQuantity, billingPeriod: waterManual.billingPeriod, sourceLabel: manualNote(waterManual) }, error: null });
+          } else {
+            setWaterMockInfo({ loading: false, data: null, error: 'Kĩ thuật viên chưa ghi lại dữ liệu nước' });
+            setFormData((prev) => ({ ...prev, waterCurrentReading: '', waterQuantity: '', waterFee: '' }));
+          }
+        }
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        const message = err.response?.data?.message || 'Không thể lấy chỉ số điện nước';
+        setMeterPreviewInfo({ loading: false, data: null, error: message });
+        setEvnMockInfo({ loading: false, data: null, error: message });
+        setWaterMockInfo({ loading: false, data: null, error: message });
+      });
+
+    return () => { cancelled = true; };
+  }, [modalOpen, modalMode, formData.apartmentId, formData.dueDate, tableFees, selectedFeeIndex, canManageInvoices, electricMeterSource, waterMeterSource, mockMeterReloadKey, applyInvoiceMeterSnapshot]);
 
   const handleTierEdit = (tier) => {
     setEditingTierId(tier.id);
@@ -394,29 +719,144 @@ export default function InvoicesPage() {
   useEffect(() => { fetchApartments(); }, [fetchApartments]);
   useEffect(() => { fetchTableFees(); }, [fetchTableFees]);
 
-  /* ─── current user ─── */
-  const currentUser = (() => {
-    try { return JSON.parse(localStorage.getItem('user')); } catch { return null; }
-  })();
+  useEffect(() => {
+    const targetPeriod = isTechnician
+      ? readingForm.billingPeriod
+      : (batchModalOpen && canManageInvoices && /^\d{2}\/\d{2}\/\d{4}$/.test(batchDueDate)
+        ? billingPeriodFromDate(batchDueDate)
+        : (modalOpen && modalMode === 'create' && canManageInvoices && formData.dueDate
+          ? billingPeriodFromDate(formData.dueDate)
+          : ''));
+    if (!targetPeriod) {
+      setPeriodInvoices([]);
+      setPeriodInvoicesLoading(false);
+      return undefined;
+    }
+
+    let cancelled = false;
+
+    const fetchPeriodInvoices = async () => {
+      setPeriodInvoicesLoading(true);
+      try {
+        const pageSize = 500;
+        let pageIndex = 0;
+        let totalPageCount = 1;
+        const rows = [];
+
+        while (pageIndex < totalPageCount) {
+          const res = await invoiceService.getAll({ page: pageIndex, size: pageSize, sortBy: 'id', direction: 'desc', billingPeriod: targetPeriod });
+          const data = res.data?.data;
+          const content = Array.isArray(data) ? data : (data?.content || []);
+          rows.push(...content);
+          totalPageCount = Array.isArray(data) ? 1 : (data?.totalPages || 1);
+          pageIndex += 1;
+        }
+
+        if (!cancelled) {
+          setPeriodInvoices(rows.filter((invoice) => billingPeriodFromDate(invoice.dueDate) === targetPeriod));
+        }
+      } catch (err) {
+        console.error('Không thể kiểm tra hóa đơn đã có trong kỳ:', err);
+        if (!cancelled) setPeriodInvoices([]);
+      } finally {
+        if (!cancelled) setPeriodInvoicesLoading(false);
+      }
+    };
+
+    fetchPeriodInvoices();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [modalOpen, modalMode, formData.dueDate, batchModalOpen, batchDueDate, canManageInvoices, isTechnician, readingForm.billingPeriod]);
+
+  useEffect(() => {
+    if (!isTechnician || !readingForm.billingPeriod) {
+      setPeriodMeterReadings([]);
+      setPeriodMeterReadingsLoading(false);
+      return undefined;
+    }
+
+    let cancelled = false;
+    const targetPeriod = readingForm.billingPeriod;
+
+    const fetchPeriodMeterReadings = async () => {
+      setPeriodMeterReadingsLoading(true);
+      try {
+        const pageSize = 500;
+        let pageIndex = 0;
+        let totalPageCount = 1;
+        const rows = [];
+
+        while (pageIndex < totalPageCount) {
+          const res = await meterReadingService.getAll({ page: pageIndex, size: pageSize, billingPeriod: targetPeriod });
+          const data = res.data?.data;
+          const content = Array.isArray(data) ? data : (data?.content || []);
+          rows.push(...content);
+          totalPageCount = Array.isArray(data) ? 1 : (data?.totalPages || 1);
+          pageIndex += 1;
+        }
+
+        if (!cancelled) {
+          setPeriodMeterReadings(rows.filter((reading) => reading.billingPeriod === targetPeriod));
+        }
+      } catch (err) {
+        console.error('Không thể kiểm tra chỉ số đã ghi trong kỳ:', err);
+        if (!cancelled) setPeriodMeterReadings([]);
+      } finally {
+        if (!cancelled) setPeriodMeterReadingsLoading(false);
+      }
+    };
+
+    fetchPeriodMeterReadings();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isTechnician, readingForm.billingPeriod]);
+
+  useEffect(() => {
+    if (isTechnician || canManageInvoices) fetchMeterReadings();
+  }, [fetchMeterReadings, isTechnician, canManageInvoices]);
+
+  useEffect(() => {
+    if (!isTechnician || !readingForm.apartmentId) {
+      if (isTechnician) setMeterPreviewInfo({ loading: false, data: null, error: null });
+      return;
+    }
+
+    let cancelled = false;
+    setMeterPreviewInfo({ loading: true, data: null, error: null });
+    meterReadingService.preview(readingForm.apartmentId, readingForm.billingPeriod)
+      .then((res) => {
+        if (cancelled) return;
+        setMeterPreviewInfo({ loading: false, data: res.data?.data || null, error: null });
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setMeterPreviewInfo({ loading: false, data: null, error: err.response?.data?.message || 'Không thể tải chỉ số gần nhất' });
+      });
+    return () => { cancelled = true; };
+  }, [isTechnician, readingForm.apartmentId, readingForm.billingPeriod]);
 
   /* ─── the active fee (selected entry) ─── */
   const activeFee = tableFees?.[selectedFeeIndex] || tableFees?.[0] || null;
 
   /* ─── auto-fill form from selected fee ─── */
   useEffect(() => {
-    if (modalOpen && activeFee) {
+    if (modalOpen && modalMode === 'create' && activeFee) {
+      const otherFeeFields = buildOtherFeeFields(normalizeOtherFeeItems(activeFee.otherFee, activeFee.descriptionOtherFee));
       setFormData((prev) => ({
         ...prev,
         managementFee: activeFee.managementFee ? String(activeFee.managementFee) : '',
-        otherFee: activeFee.otherFee ? String(activeFee.otherFee) : '0',
-        descriptionOtherFee: activeFee.descriptionOtherFee || '',
+        ...otherFeeFields,
       }));
     }
-  }, [selectedFeeIndex, modalOpen, activeFee]);
+  }, [selectedFeeIndex, modalOpen, modalMode, activeFee]);
 
   /* ─── auto-calculate parking fee from vehicle counts ─── */
   useEffect(() => {
-    if (!modalOpen || !formData.apartmentId || !activeFee) {
+    if (!modalOpen || modalMode !== 'create' || !formData.apartmentId || !activeFee) {
       setParkingFeeInfo({ loading: false, vehicles: null, error: null });
       return;
     }
@@ -464,15 +904,118 @@ export default function InvoicesPage() {
         console.error('Lỗi tính phí gửi xe:', err);
         setParkingFeeInfo({ loading: false, vehicles: null, error: 'Không thể tính phí gửi xe' });
       });
-  }, [modalOpen, formData.apartmentId, activeFee, selectedFeeIndex]);
+  }, [modalOpen, modalMode, formData.apartmentId, activeFee, selectedFeeIndex]);
 
   /* ─── handlers ─── */
   const handleFilterChange = (val) => { setFilterStatus(val); setPage(0); };
   const handleToggleSort = () => { setSortDirection((p) => (p === 'asc' ? 'desc' : 'asc')); setPage(0); };
 
+  const openMeterEntryModal = (apt) => {
+    setReadingForm((prev) => ({
+      ...prev,
+      apartmentId: apt.id,
+      electricCurrentReading: '',
+      waterCurrentReading: '',
+      note: '',
+      electricFile: null,
+      waterFile: null,
+    }));
+    setMeterEntryModalOpen(true);
+  };
+
+  const closeMeterEntryModal = () => {
+    setMeterEntryModalOpen(false);
+  };
+
+  const handleReadingFormChange = (field, value) => {
+    setReadingForm((prev) => ({ ...prev, [field]: value }));
+  };
+
+  const handleBillingPeriodChange = (value) => {
+    const nextInput = normalizeBillingPeriodInput(value);
+    setBillingPeriodInput(nextInput);
+    setReadingForm((prev) => ({ ...prev, billingPeriod: parseBillingPeriodInput(nextInput) }));
+  };
+
+  const handleReadingSubmit = async (e) => {
+    e.preventDefault();
+    if (!readingForm.apartmentId) {
+      toast.warning('Vui lòng chọn căn hộ');
+      return;
+    }
+    if (billingPeriodInput && !readingForm.billingPeriod) {
+      toast.warning('Kỳ ghi chỉ số phải đúng định dạng MM/yyyy');
+      return;
+    }
+    if (!readingForm.electricCurrentReading && !readingForm.waterCurrentReading) {
+      toast.warning('Vui lòng nhập chỉ số điện hoặc nước');
+      return;
+    }
+    if (meterReadingPeriodByApartmentId.has(String(readingForm.apartmentId))) {
+      toast.error(`Căn hộ này đã ghi chỉ số kỳ ${formatBillingPeriodDisplay(readingForm.billingPeriod)}. Không thể ghi lại.`);
+      return;
+    }
+
+    const data = new FormData();
+    data.append('apartmentId', readingForm.apartmentId);
+    if (readingForm.billingPeriod) data.append('billingPeriod', readingForm.billingPeriod);
+    if (readingForm.electricCurrentReading) data.append('electricCurrentReading', readingForm.electricCurrentReading);
+    if (readingForm.waterCurrentReading) data.append('waterCurrentReading', readingForm.waterCurrentReading);
+    if (readingForm.note?.trim()) data.append('note', readingForm.note.trim());
+    if (readingForm.electricFile) data.append('electricFile', readingForm.electricFile);
+    if (readingForm.waterFile) data.append('waterFile', readingForm.waterFile);
+
+    setReadingSubmitting(true);
+    try {
+      const res = await meterReadingService.create(data);
+      if (res.data?.status !== false) {
+        const savedReading = res.data?.data;
+        if (savedReading?.billingPeriod === readingForm.billingPeriod) {
+          setPeriodMeterReadings((prev) => [
+            savedReading,
+            ...prev.filter((item) => item.meterReadingId !== savedReading.meterReadingId),
+          ]);
+        }
+        toast.success('Đã ghi chỉ số điện nước');
+        setMeterEntryModalOpen(false);
+        setReadingForm((prev) => ({
+          ...prev,
+          electricCurrentReading: '',
+          waterCurrentReading: '',
+          note: '',
+          electricFile: null,
+          waterFile: null,
+        }));
+        fetchMeterReadings(readingForm.apartmentId);
+        meterReadingService.preview(readingForm.apartmentId, readingForm.billingPeriod)
+          .then((previewRes) => setMeterPreviewInfo({ loading: false, data: previewRes.data?.data || null, error: null }))
+          .catch(() => {});
+      } else {
+        toast.error(res.data?.message || 'Ghi chỉ số thất bại');
+      }
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Ghi chỉ số thất bại');
+    } finally {
+      setReadingSubmitting(false);
+    }
+  };
+
+  const handleOpenEvidence = async (reading, type) => {
+    if (!reading?.meterReadingId) return;
+    try {
+      const res = await meterReadingService.evidence(reading.meterReadingId, type);
+      const url = URL.createObjectURL(res.data);
+      window.open(url, '_blank', 'noopener,noreferrer');
+      setTimeout(() => URL.revokeObjectURL(url), 60000);
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Không thể mở ảnh kiểm chứng');
+    }
+  };
+
   const openCreateModal = () => {
     setModalMode('create');
     setSelectedInvoice(null);
+    setInvoiceStep(0);
     
     // Default dueDate to today + 1 day of next month (using local timezone)
     const today = new Date();
@@ -490,53 +1033,91 @@ export default function InvoicesPage() {
     
     setFormData({
       invoiceNumber: '', dueDate: defaultDueDate, electricFee: '', waterFee: '',
-      managementFee: '', parkingFee: '', otherFee: '', descriptionOtherFee: '', apartmentId: '', invoiceStatus: 'UNPAID',
-      electricQuantity: '', waterQuantity: '', electricStartDate: defaultStartDate, electricEndDate: defaultDueDate, numberOfHouseholds: '1',
+      managementFee: '', parkingFee: '', otherFee: '', descriptionOtherFee: '', otherFeeItems: [createOtherFeeItem()], apartmentId: '', invoiceStatus: 'UNPAID',
+      electricQuantity: '', electricPreviousReading: '', electricCurrentReading: '',
+      waterQuantity: '', waterPreviousReading: '', waterCurrentReading: '',
+      electricStartDate: defaultStartDate, electricEndDate: defaultDueDate, numberOfHouseholds: '1',
     });
     setFormErrors({});
+    setMeterPreviewInfo({ loading: false, data: null, error: null });
+    setElectricMeterSource('MOCK_API');
+    setWaterMeterSource('MOCK_API');
     setAptFilterBlock('');
     setAptFilterFloor('');
+    setAptFilterStatus('');
+    setAptModalSearch('');
+    setAptModalPage(0);
     setModalOpen(true);
   };
 
   const openEditModal = (inv) => {
     setModalMode('edit');
     setSelectedInvoice(inv);
+    setInvoiceStep(0);
+    const dueDate = toInputDate(inv.dueDate);
     
     // Reverse calculate quantities if activeFee is available
     let eq = '';
-    if (inv.electricFee && activeFee && activeFee.electricFee > 0) {
-      eq = String(inv.electricFee / activeFee.electricFee);
+    if (inv.electricQuantity != null) {
+      eq = String(inv.electricQuantity);
+    } else if (inv.electricFee && activeFee && activeFee.electricFee > 0) {
+      eq = String(Math.round(Number(toPreTaxFeeString(inv.electricFee, 1.08)) / activeFee.electricFee));
     }
     let wq = '';
-    if (inv.waterFee && activeFee && activeFee.waterFee > 0) {
-      wq = String(inv.waterFee / activeFee.waterFee);
+    if (inv.waterQuantity != null) {
+      wq = String(inv.waterQuantity);
+    } else if (inv.waterFee && activeFee && activeFee.waterFee > 0) {
+      wq = String(Math.round(Number(toPreTaxFeeString(inv.waterFee, 1.15)) / activeFee.waterFee));
     }
 
     setFormData({
       invoiceNumber: inv.invoiceNumber || '',
-      dueDate: toInputDate(inv.dueDate),
-      electricFee: inv.electricFee != null ? String(inv.electricFee) : '',
-      waterFee: inv.waterFee != null ? String(inv.waterFee) : '',
+      dueDate,
+      electricFee: toPreTaxFeeString(inv.electricFee, 1.08),
+      waterFee: toPreTaxFeeString(inv.waterFee, 1.15),
       managementFee: inv.managementFee != null ? String(inv.managementFee) : '',
       parkingFee: inv.parkingFee != null ? String(inv.parkingFee) : '',
       otherFee: inv.otherFee != null ? String(inv.otherFee) : '',
       descriptionOtherFee: inv.descriptionOtherFee || '',
+      otherFeeItems: normalizeOtherFeeItems(inv.otherFee, inv.descriptionOtherFee),
       apartmentId: inv.apartment?.id || inv.apartmentId || '',
       invoiceStatus: inv.invoiceStatus || 'UNPAID',
       electricQuantity: eq,
+      electricPreviousReading: inv.electricPreviousReading != null ? String(inv.electricPreviousReading) : '',
+      electricCurrentReading: inv.electricCurrentReading != null ? String(inv.electricCurrentReading) : '',
       waterQuantity: wq,
-      electricStartDate: '',
-      electricEndDate: '',
+      waterPreviousReading: inv.waterPreviousReading != null ? String(inv.waterPreviousReading) : '',
+      waterCurrentReading: inv.waterCurrentReading != null ? String(inv.waterCurrentReading) : '',
+      electricStartDate: billingPeriodStartDate(inv.billingPeriod, dueDate),
+      electricEndDate: dueDate,
       numberOfHouseholds: '1',
     });
     setFormErrors({});
+    setElectricMeterSource('MOCK_API');
+    setWaterMeterSource('MOCK_API');
     setAptFilterBlock('');
     setAptFilterFloor('');
+    setAptFilterStatus('');
+    setAptModalSearch('');
+    setAptModalPage(0);
     setModalOpen(true);
   };
 
-  const openViewModal = (inv) => { setModalMode('view'); setSelectedInvoice(inv); setModalOpen(true); };
+  const openViewModal = async (inv) => {
+    setModalMode('view');
+    setSelectedInvoice(inv);
+    setModalOpen(true);
+
+    if (!inv?.invoiceId) return;
+
+    try {
+      const res = await invoiceService.getById(inv.invoiceId);
+      const detail = res.data?.data;
+      if (detail) setSelectedInvoice({ ...inv, ...detail });
+    } catch (err) {
+      console.error('Không thể tải chi tiết hóa đơn:', err);
+    }
+  };
   const openDeleteModal = (inv) => { setDeleteTarget(inv); setDeleteModalOpen(true); };
 
   const handleFormChange = (field, value) => {
@@ -550,16 +1131,38 @@ export default function InvoicesPage() {
         if (qty > MAX_QUANTITY) {
           updated.electricQuantity = String(MAX_QUANTITY);
         }
+        if (updated.electricPreviousReading !== '') {
+          updated.electricCurrentReading = String((Number(updated.electricPreviousReading) || 0) + (Number(updated.electricQuantity) || 0));
+        }
       }
       if (field === 'waterQuantity') {
         const qty = Number(value);
         if (qty > MAX_QUANTITY) {
           updated.waterQuantity = String(MAX_QUANTITY);
         }
+        if (updated.waterPreviousReading !== '') {
+          updated.waterCurrentReading = String((Number(updated.waterPreviousReading) || 0) + (Number(updated.waterQuantity) || 0));
+        }
       }
-      
+
+      if (field === 'electricPreviousReading' || field === 'electricCurrentReading') {
+        const prevReading = Number(updated.electricPreviousReading) || 0;
+        const currentReading = Number(updated.electricCurrentReading) || 0;
+        if (currentReading >= prevReading) {
+          updated.electricQuantity = String(currentReading - prevReading);
+        }
+      }
+
+      if (field === 'waterPreviousReading' || field === 'waterCurrentReading') {
+        const prevReading = Number(updated.waterPreviousReading) || 0;
+        const currentReading = Number(updated.waterCurrentReading) || 0;
+        if (currentReading >= prevReading) {
+          updated.waterQuantity = String(currentReading - prevReading);
+        }
+      }
+       
       // Auto-calculate electricFee when electricQuantity changes
-      if (field === 'electricQuantity' && activeFee) {
+      if ((field === 'electricQuantity' || field === 'electricPreviousReading' || field === 'electricCurrentReading') && activeFee) {
         if (!activeFee.useTieredElectric && activeFee.electricFee > 0) {
           const qty = Number(updated.electricQuantity);
           updated.electricFee = qty > 0 ? String(qty * Number(activeFee.electricFee)) : '';
@@ -569,7 +1172,7 @@ export default function InvoicesPage() {
       }
       
       // Auto-calculate waterFee when waterQuantity changes
-      if (field === 'waterQuantity' && activeFee && activeFee.waterFee > 0) {
+      if ((field === 'waterQuantity' || field === 'waterPreviousReading' || field === 'waterCurrentReading') && activeFee && activeFee.waterFee > 0) {
         const qty = Number(updated.waterQuantity);
         updated.waterFee = qty > 0 ? String(qty * Number(activeFee.waterFee)) : '';
       }
@@ -579,12 +1182,69 @@ export default function InvoicesPage() {
     if (formErrors[field]) setFormErrors((prev) => ({ ...prev, [field]: '' }));
   };
 
+  const getCurrentOtherFeeItems = (data) => (
+    Array.isArray(data.otherFeeItems) && data.otherFeeItems.length
+      ? data.otherFeeItems
+      : normalizeOtherFeeItems(data.otherFee, data.descriptionOtherFee)
+  );
+
+  const handleOtherFeeItemChange = (id, field, value) => {
+    setFormData((prev) => {
+      const items = getCurrentOtherFeeItems(prev).map((item) => (
+        item.id === id
+          ? { ...item, [field]: field === 'amount' ? parseInputCurrency(value) : value }
+          : item
+      ));
+      return { ...prev, ...buildOtherFeeFields(items) };
+    });
+  };
+
+  const handleAddOtherFeeItem = () => {
+    setFormData((prev) => ({
+      ...prev,
+      ...buildOtherFeeFields([...getCurrentOtherFeeItems(prev), createOtherFeeItem()]),
+    }));
+  };
+
+  const handleRemoveOtherFeeItem = (id) => {
+    setFormData((prev) => {
+      const items = getCurrentOtherFeeItems(prev).filter((item) => item.id !== id);
+      return { ...prev, ...buildOtherFeeFields(items) };
+    });
+  };
+
+  const handleElectricMeterSourceSelect = (source) => {
+    setElectricMeterSource(source);
+    if (source === 'MOCK_API') {
+      setMockMeterReloadKey((prev) => prev + 1);
+    }
+  };
+
+  const handleWaterMeterSourceSelect = (source) => {
+    setWaterMeterSource(source);
+    if (source === 'MOCK_API') {
+      setMockMeterReloadKey((prev) => prev + 1);
+    }
+  };
+
   const validateForm = () => {
     const errors = {};
     if (!formData.dueDate) errors.dueDate = 'Vui lòng chọn hạn thanh toán';
     if (modalMode === 'create' && !formData.apartmentId) errors.apartmentId = 'Vui lòng chọn căn hộ';
+    if (modalMode === 'create' && electricMeterSource === 'MANUAL' && !formData.electricCurrentReading) {
+      toast.error(evnMockInfo.error || 'Kĩ thuật viên chưa ghi lại dữ liệu điện');
+      return false;
+    }
+    if (modalMode === 'create' && waterMeterSource === 'MANUAL' && !formData.waterCurrentReading) {
+      toast.error(waterMockInfo.error || 'Kĩ thuật viên chưa ghi lại dữ liệu nước');
+      return false;
+    }
     if (activeFee?.useTieredElectric && formData.electricQuantity && !formData.electricFee && isCalculatingElectric) {
       toast.error('Đang tính phí điện bậc thang, vui lòng chờ...');
+      return false;
+    }
+    if (activeFee?.useTieredElectric && formData.electricQuantity && !formData.electricFee) {
+      toast.error('Chưa có tiền điện bậc thang sau khi đổi chỉ số. Vui lòng kiểm tra ngày tính điện và chờ hệ thống tính lại.');
       return false;
     }
     setFormErrors(errors);
@@ -643,6 +1303,7 @@ export default function InvoicesPage() {
     if (!validateForm()) return;
     setSubmitting(true);
     try {
+      const otherFeeSummary = getFormOtherFeeSummary(formData);
       let payload;
       if (modalMode === 'create') {
         payload = {
@@ -650,6 +1311,9 @@ export default function InvoicesPage() {
           dueDate: formData.dueDate,
           apartmentId: Number(formData.apartmentId),
           creatorId: currentUser?.id || currentUser?.userId,
+          meterReadingSource: electricMeterSource === 'MANUAL' && waterMeterSource === 'MANUAL' ? 'MANUAL' : 'MOCK_API',
+          electricMeterReadingSource: electricMeterSource,
+          waterMeterReadingSource: waterMeterSource,
         };
         if (!payload.creatorId) {
           toast.error('Thiếu thông tin người tạo. Vui lòng đăng xuất và đăng nhập lại!');
@@ -669,16 +1333,23 @@ export default function InvoicesPage() {
         payload.electricFee = Math.round(Number(formData.electricFee) * 1.08);
       }
 
-      // Water
+      // Water (bao gồm 5% thuế GTGT + 10% phí BVMT = 15%)
       if (formData.waterFee) {
-        payload.waterFee = Number(formData.waterFee);
+        payload.waterFee = Math.round(Number(formData.waterFee) * 1.15);
       }
+
+      if (formData.electricQuantity) payload.electricQuantity = Number(formData.electricQuantity);
+      if (formData.electricPreviousReading !== '') payload.electricPreviousReading = Number(formData.electricPreviousReading);
+      if (formData.electricCurrentReading !== '') payload.electricCurrentReading = Number(formData.electricCurrentReading);
+      if (formData.waterQuantity) payload.waterQuantity = Number(formData.waterQuantity);
+      if (formData.waterPreviousReading !== '') payload.waterPreviousReading = Number(formData.waterPreviousReading);
+      if (formData.waterCurrentReading !== '') payload.waterCurrentReading = Number(formData.waterCurrentReading);
 
       // Other fees
       if (formData.managementFee) payload.managementFee = Number(formData.managementFee);
       if (formData.parkingFee) payload.parkingFee = Number(formData.parkingFee);
-      if (formData.otherFee) payload.otherFee = Number(formData.otherFee);
-      if (formData.descriptionOtherFee) payload.descriptionOtherFee = formData.descriptionOtherFee.trim();
+      if (otherFeeSummary.total > 0) payload.otherFee = otherFeeSummary.total;
+      if (otherFeeSummary.description) payload.descriptionOtherFee = otherFeeSummary.description;
 
       let res;
       if (modalMode === 'create') {
@@ -755,7 +1426,7 @@ export default function InvoicesPage() {
     let createdDate = 'N/A';
     const rawDate = inv.createdAt || inv.createdDate || inv.created_at;
     if (rawDate) {
-      try { createdDate = new Date(rawDate).toLocaleDateString('vi-VN'); } catch(e) { /* ignore */ }
+      try { createdDate = new Date(rawDate).toLocaleDateString('vi-VN'); } catch { /* ignore */ }
     }
 
     const isPaid = inv.invoiceStatus === 'PAID';
@@ -845,11 +1516,31 @@ export default function InvoicesPage() {
     }
   };
 
+  const handleVnPayPayment = async (invoiceId) => {
+    try {
+      toast.info('Đang tạo liên kết thanh toán VNPay...');
+      const res = await paymentService.createVnPayPayment(invoiceId);
+      const paymentUrl = res.data?.data;
+      if (paymentUrl && typeof paymentUrl === 'string' && paymentUrl.startsWith('http')) {
+        window.open(paymentUrl, '_blank');
+      } else {
+        toast.error('Không thể tạo liên kết thanh toán');
+      }
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Lỗi khi tạo thanh toán VNPay');
+    }
+  };
+
   const handleManualPayment = async () => {
     if (!payMethod) { toast.warning('Vui lòng chọn phương thức thanh toán'); return; }
     if (payMethod === 'MOMO') {
       setPayModalOpen(false);
       handleMomoPayment(payInvoiceId);
+      return;
+    }
+    if (payMethod === 'VNPAY') {
+      setPayModalOpen(false);
+      handleVnPayPayment(payInvoiceId);
       return;
     }
     setPaySubmitting(true);
@@ -907,6 +1598,37 @@ export default function InvoicesPage() {
   const getApartmentLabel = (apt) => {
     if (!apt) return '—';
     return `${apt.block ? `${apt.block}-` : ''}${apt.apartmentNumber || ''}${apt.floor != null ? ` (Tầng ${apt.floor})` : ''}`;
+  };
+
+  const getCurrentBatchOtherFeeItems = (data) => (
+    Array.isArray(data?.otherFeeItems) && data.otherFeeItems.length
+      ? data.otherFeeItems
+      : normalizeOtherFeeItems(data?.otherFee, data?.descriptionOtherFee)
+  );
+
+  const handleBatchOtherFeeItemChange = (id, field, value) => {
+    setBatchFeeDraft((prev) => {
+      const items = getCurrentBatchOtherFeeItems(prev).map((item) => (
+        item.id === id
+          ? { ...item, [field]: field === 'amount' ? parseInputCurrency(value) : value }
+          : item
+      ));
+      return { ...prev, ...buildOtherFeeFields(items) };
+    });
+  };
+
+  const handleAddBatchOtherFeeItem = () => {
+    setBatchFeeDraft((prev) => ({
+      ...prev,
+      ...buildOtherFeeFields([...getCurrentBatchOtherFeeItems(prev), createOtherFeeItem()]),
+    }));
+  };
+
+  const handleRemoveBatchOtherFeeItem = (id) => {
+    setBatchFeeDraft((prev) => {
+      const items = getCurrentBatchOtherFeeItems(prev).filter((item) => item.id !== id);
+      return { ...prev, ...buildOtherFeeFields(items) };
+    });
   };
 
   /* ─── Table Fee handlers ─── */
@@ -1016,11 +1738,848 @@ export default function InvoicesPage() {
   /* ─── Fee table data rows ─── */
   const feeTableRows = activeFee ? [
     { label: 'Phí quản lý căn hộ', sub: 'Phí duy trì hoạt động chung cư', value: activeFee.managementFee, unit: 'tháng' },
-    { label: 'Phí gửi xe', sub: 'Ô tô, xe máy, xe đạp', value: 'Tùy loại xe', unit: '' },
+    { label: 'Phí gửi xe', sub: 'Ô tô, xe máy, xe đạp', value: 'Tính theo xe', isVehicle: true },
     { label: 'Điện', sub: 'Tiêu thụ điện năng', value: activeFee.electricFee, unit: 'kWh', isTiered: activeFee.useTieredElectric },
     { label: 'Nước', sub: 'Tiêu thụ nước', value: activeFee.waterFee, unit: 'm³' },
     { label: 'Phí khác', sub: 'Các phí phát sinh khác', value: activeFee.otherFee, unit: 'tháng' },
   ] : [];
+
+  const apartmentBlocks = useMemo(
+    () => [...new Set(apartments.map((apt) => apt.block).filter(Boolean))].sort(),
+    [apartments]
+  );
+  const apartmentFloors = useMemo(
+    () => [...new Set(apartments
+      .filter((apt) => !aptFilterBlock || apt.block === aptFilterBlock)
+      .map((apt) => apt.floor)
+      .filter((floor) => floor != null)
+    )].sort((a, b) => Number(a) - Number(b)),
+    [apartments, aptFilterBlock]
+  );
+  const apartmentStatuses = useMemo(
+    () => [...new Set(apartments.map((apt) => apt.apartmentStatus).filter(Boolean))].sort(),
+    [apartments]
+  );
+  const filteredApartments = useMemo(
+    () => apartments.filter((apt) =>
+      (!aptFilterBlock || apt.block === aptFilterBlock)
+      && (!aptFilterFloor || String(apt.floor) === String(aptFilterFloor))
+      && (!aptFilterStatus || apt.apartmentStatus === aptFilterStatus)
+    ),
+    [apartments, aptFilterBlock, aptFilterFloor, aptFilterStatus]
+  );
+  const meterEligibleApartments = useMemo(
+    () => apartments.filter(isMeterEligibleApartment),
+    [apartments]
+  );
+  const meterApartmentBlocks = useMemo(
+    () => [...new Set(meterEligibleApartments.map((apt) => apt.block).filter(Boolean))].sort(),
+    [meterEligibleApartments]
+  );
+  const meterApartmentFloors = useMemo(
+    () => [...new Set(meterEligibleApartments
+      .filter((apt) => !aptFilterBlock || apt.block === aptFilterBlock)
+      .map((apt) => apt.floor)
+      .filter((floor) => floor != null)
+    )].sort((a, b) => Number(a) - Number(b)),
+    [meterEligibleApartments, aptFilterBlock]
+  );
+  const meterApartmentStatuses = useMemo(
+    () => [...new Set(meterEligibleApartments.map((apt) => apt.apartmentStatus).filter(Boolean))].sort(),
+    [meterEligibleApartments]
+  );
+  const invoicePeriodByApartmentId = useMemo(() => {
+    const map = new Map();
+    periodInvoices.forEach((invoice) => {
+      const apartmentId = getInvoiceApartmentId(invoice);
+      if (!apartmentId) return;
+      const key = String(apartmentId);
+      if (!map.has(key)) map.set(key, invoice);
+    });
+    return map;
+  }, [periodInvoices]);
+  const filteredBatchApartments = useMemo(
+    () => scopedBatchApartments.filter((apt) => {
+      const hasInvoice = invoicePeriodByApartmentId.has(String(apt.id));
+      if (batchInvoiceFilter === 'HAS_INVOICE') return hasInvoice;
+      if (batchInvoiceFilter === 'NO_INVOICE') return !hasInvoice;
+      return true;
+    }),
+    [scopedBatchApartments, invoicePeriodByApartmentId, batchInvoiceFilter]
+  );
+  const batchScopedExistingInvoiceCount = useMemo(
+    () => scopedBatchApartments.filter((apt) => invoicePeriodByApartmentId.has(String(apt.id))).length,
+    [scopedBatchApartments, invoicePeriodByApartmentId]
+  );
+  const batchScopedNoInvoiceCount = scopedBatchApartments.length - batchScopedExistingInvoiceCount;
+  const batchInvoicePeriodLabel = /^\d{2}\/\d{2}\/\d{4}$/.test(batchDueDate)
+    ? formatBillingPeriodDisplay(billingPeriodFromDate(batchDueDate))
+    : '';
+  const batchExistingInvoiceCount = useMemo(
+    () => eligibleBatchApartments.filter((apt) => invoicePeriodByApartmentId.has(String(apt.id))).length,
+    [eligibleBatchApartments, invoicePeriodByApartmentId]
+  );
+  const batchSelectedExistingCount = useMemo(
+    () => batchSelectedApts.filter((id) => invoicePeriodByApartmentId.has(String(id))).length,
+    [batchSelectedApts, invoicePeriodByApartmentId]
+  );
+  const meterReadingPeriodByApartmentId = useMemo(() => {
+    const map = new Map();
+    periodMeterReadings.forEach((reading) => {
+      const apartmentId = getMeterReadingApartmentId(reading);
+      if (!apartmentId) return;
+      const key = String(apartmentId);
+      if (!map.has(key)) map.set(key, reading);
+    });
+    return map;
+  }, [periodMeterReadings]);
+  const meterFilteredApartments = useMemo(() => {
+    const keyword = meterAptSearch.trim().toLowerCase();
+
+    return meterEligibleApartments.filter((apt) => {
+      const aptKey = String(apt.id);
+      const hasPeriodReading = meterReadingPeriodByApartmentId.has(aptKey);
+      if (meterAptMode === 'NEED_READING' && hasPeriodReading) return false;
+      if (meterAptMode === 'RECORDED' && !hasPeriodReading) return false;
+      if (aptFilterBlock && apt.block !== aptFilterBlock) return false;
+      if (aptFilterFloor && String(apt.floor) !== String(aptFilterFloor)) return false;
+      if (aptFilterStatus && apt.apartmentStatus !== aptFilterStatus) return false;
+      if (!keyword) return true;
+
+      const owner = getApartmentOwner(apt);
+      const tenant = getApartmentTenant(apt);
+      const searchable = [
+        apt.apartmentNumber,
+        apt.block,
+        apt.floor,
+        apt.area,
+        apt.apartmentStatus,
+        apartmentStatusLabel[apt.apartmentStatus],
+        owner?.fullName,
+        getResidentPhone(owner),
+        tenant?.fullName,
+        getResidentPhone(tenant),
+      ].filter(Boolean).join(' ').toLowerCase();
+
+      return searchable.includes(keyword);
+    });
+  }, [meterEligibleApartments, meterReadingPeriodByApartmentId, meterAptMode, aptFilterBlock, aptFilterFloor, aptFilterStatus, meterAptSearch]);
+  const meterApartmentPageCount = Math.max(1, Math.ceil(meterFilteredApartments.length / METER_APARTMENT_PAGE_SIZE));
+  const safeMeterAptPage = Math.min(meterAptPage, meterApartmentPageCount - 1);
+  const meterApartmentRows = useMemo(
+    () => meterFilteredApartments.slice(
+      safeMeterAptPage * METER_APARTMENT_PAGE_SIZE,
+      safeMeterAptPage * METER_APARTMENT_PAGE_SIZE + METER_APARTMENT_PAGE_SIZE
+    ),
+    [meterFilteredApartments, safeMeterAptPage]
+  );
+
+  const modalFilteredApartments = useMemo(() => {
+    const keyword = aptModalSearch.trim().toLowerCase();
+    if (!keyword) return filteredApartments;
+
+    return filteredApartments.filter((apt) => {
+      const owner = getApartmentOwner(apt);
+      const tenant = getApartmentTenant(apt);
+      const searchable = [
+        apt.apartmentNumber,
+        apt.block,
+        apt.floor,
+        apt.area,
+        apt.apartmentStatus,
+        apartmentStatusLabel[apt.apartmentStatus],
+        owner?.fullName,
+        owner?.phone,
+        tenant?.fullName,
+        tenant?.phone,
+      ].filter(Boolean).join(' ').toLowerCase();
+
+      return searchable.includes(keyword);
+    });
+  }, [filteredApartments, aptModalSearch]);
+
+  const modalApartmentPageCount = Math.max(1, Math.ceil(modalFilteredApartments.length / MODAL_APARTMENT_PAGE_SIZE));
+  const safeAptModalPage = Math.min(aptModalPage, modalApartmentPageCount - 1);
+  const modalApartmentRows = useMemo(
+    () => modalFilteredApartments.slice(
+      safeAptModalPage * MODAL_APARTMENT_PAGE_SIZE,
+      safeAptModalPage * MODAL_APARTMENT_PAGE_SIZE + MODAL_APARTMENT_PAGE_SIZE
+    ),
+    [modalFilteredApartments, safeAptModalPage]
+  );
+  const selectedModalApartment = useMemo(
+    () => apartments.find((apt) => String(apt.id) === String(formData.apartmentId)),
+    [apartments, formData.apartmentId]
+  );
+  const modalInvoicePeriodLabel = formatBillingPeriodDisplay(billingPeriodFromDate(formData.dueDate));
+
+  useEffect(() => {
+    setMeterAptPage(0);
+  }, [aptFilterBlock, aptFilterFloor, aptFilterStatus, meterAptSearch, meterAptMode, readingForm.billingPeriod]);
+
+  useEffect(() => {
+    if (meterAptPage > meterApartmentPageCount - 1) {
+      setMeterAptPage(meterApartmentPageCount - 1);
+    }
+  }, [meterAptPage, meterApartmentPageCount]);
+
+  useEffect(() => {
+    setAptModalPage(0);
+  }, [aptFilterBlock, aptFilterFloor, aptFilterStatus, aptModalSearch]);
+
+  useEffect(() => {
+    if (aptModalPage > modalApartmentPageCount - 1) {
+      setAptModalPage(modalApartmentPageCount - 1);
+    }
+  }, [aptModalPage, modalApartmentPageCount]);
+
+  const invoiceSteps = useMemo(() => {
+    const steps = modalMode === 'create'
+      ? [
+        { key: 'apartment', label: 'Căn hộ', icon: Icons.home },
+        { key: 'info', label: 'Chứng từ', icon: Icons.note },
+        { key: 'electric', label: 'Tiền điện', icon: Icons.zap },
+        { key: 'water', label: 'Tiền nước', icon: Icons.droplet },
+        { key: 'fees', label: 'Phí khác', icon: Icons.fee },
+        { key: 'review', label: 'Xác nhận', icon: Icons.check },
+      ]
+      : [
+        { key: 'info', label: 'Chứng từ', icon: Icons.note },
+        { key: 'electric', label: 'Tiền điện', icon: Icons.zap },
+        { key: 'water', label: 'Tiền nước', icon: Icons.droplet },
+        { key: 'fees', label: 'Phí khác', icon: Icons.fee },
+        { key: 'review', label: 'Xác nhận', icon: Icons.check },
+      ];
+    return steps;
+  }, [modalMode]);
+
+  const currentInvoiceStep = invoiceSteps[Math.min(invoiceStep, invoiceSteps.length - 1)] || invoiceSteps[0];
+  const isInvoiceFirstStep = invoiceStep <= 0;
+  const isInvoiceLastStep = invoiceStep >= invoiceSteps.length - 1;
+  const isInvoiceStep = (key) => currentInvoiceStep?.key === key;
+
+  const getInvoiceStepBlockReason = (nextStep) => {
+    const targetStep = Math.max(0, Math.min(nextStep, invoiceSteps.length - 1));
+    if (targetStep <= invoiceStep) return '';
+
+    const requiredSteps = invoiceSteps.slice(0, targetStep);
+    if (requiredSteps.some((step) => step.key === 'apartment') && !formData.apartmentId) {
+      return 'Vui lòng chọn căn hộ trước khi qua bước tiếp theo';
+    }
+    if (requiredSteps.some((step) => step.key === 'info') && !formData.dueDate) {
+      return 'Vui lòng chọn hạn thanh toán trước khi qua bước tiếp theo';
+    }
+    return '';
+  };
+
+  const goToInvoiceStep = (nextStep) => {
+    const targetStep = Math.max(0, Math.min(nextStep, invoiceSteps.length - 1));
+    const blockReason = getInvoiceStepBlockReason(targetStep);
+    if (blockReason) {
+      if (modalMode === 'create' && !formData.apartmentId) {
+        setFormErrors((prev) => ({ ...prev, apartmentId: 'Vui lòng chọn căn hộ' }));
+      }
+      if (!formData.dueDate) {
+        setFormErrors((prev) => ({ ...prev, dueDate: 'Vui lòng chọn hạn thanh toán' }));
+      }
+      toast.warning(blockReason);
+      return;
+    }
+    setInvoiceStep(targetStep);
+  };
+
+  const handleInvoiceNextStep = () => {
+    if (currentInvoiceStep?.key === 'apartment' && !formData.apartmentId) {
+      setFormErrors((prev) => ({ ...prev, apartmentId: 'Vui lòng chọn căn hộ' }));
+      toast.warning('Vui lòng chọn căn hộ trước khi tiếp tục');
+      return;
+    }
+    if (currentInvoiceStep?.key === 'info' && !formData.dueDate) {
+      setFormErrors((prev) => ({ ...prev, dueDate: 'Vui lòng chọn hạn thanh toán' }));
+      toast.warning('Vui lòng chọn hạn thanh toán');
+      return;
+    }
+    goToInvoiceStep(invoiceStep + 1);
+  };
+
+  const invoiceOtherFeeItems = Array.isArray(formData.otherFeeItems) && formData.otherFeeItems.length
+    ? formData.otherFeeItems
+    : normalizeOtherFeeItems(formData.otherFee, formData.descriptionOtherFee);
+  const invoiceOtherFeeSummary = summarizeOtherFeeItems(invoiceOtherFeeItems);
+  const batchOtherFeeItems = Array.isArray(batchFeeDraft?.otherFeeItems) && batchFeeDraft.otherFeeItems.length
+    ? batchFeeDraft.otherFeeItems
+    : normalizeOtherFeeItems(batchFeeDraft?.otherFee, batchFeeDraft?.descriptionOtherFee);
+  const batchOtherFeeSummary = summarizeOtherFeeItems(batchOtherFeeItems);
+
+  const invoiceTotalPreview = (() => {
+    const electricAfterTax = Math.round((Number(formData.electricFee) || 0) * 1.08);
+    const waterAfterTax = Math.round((Number(formData.waterFee) || 0) * 1.15);
+    return {
+      electricAfterTax,
+      waterAfterTax,
+      total: electricAfterTax + waterAfterTax + (Number(formData.managementFee) || 0) + (Number(formData.parkingFee) || 0) + invoiceOtherFeeSummary.total,
+    };
+  })();
+
+  if (isTechnician) {
+    const preview = meterPreviewInfo.data;
+    const isElectricTab = meterTab === 'electric';
+    const selectedApartment = apartments.find((apt) => String(apt.id) === String(readingForm.apartmentId));
+    const selectedPeriodReading = selectedApartment
+      ? meterReadingPeriodByApartmentId.get(String(selectedApartment.id))
+      : null;
+    const meterCards = [
+      {
+        key: 'electric',
+        label: 'Điện',
+        title: 'Chỉ số điện',
+        unit: 'kWh',
+        icon: Icons.zap,
+        currentField: 'electricCurrentReading',
+        formValue: readingForm.electricCurrentReading,
+        previous: preview?.electricPreviousReading,
+        current: preview?.electricCurrentReading,
+        quantity: preview?.electricQuantity,
+      },
+      {
+        key: 'water',
+        label: 'Nước',
+        title: 'Chỉ số nước',
+        unit: 'm³',
+        icon: Icons.droplet,
+        currentField: 'waterCurrentReading',
+        formValue: readingForm.waterCurrentReading,
+        previous: preview?.waterPreviousReading,
+        current: preview?.waterCurrentReading,
+        quantity: preview?.waterQuantity,
+      },
+    ];
+    const visibleMeterReadings = meterReadings.filter((r) =>
+      isElectricTab ? r.electricCurrentReading != null : r.waterCurrentReading != null
+    );
+    const activeMeterFilterCount = [
+      aptFilterBlock,
+      aptFilterFloor,
+      aptFilterStatus,
+      meterAptMode !== 'NEED_READING' ? meterAptMode : '',
+      meterAptSearch.trim(),
+    ].filter(Boolean).length;
+    const meterFilterGroups = [
+      {
+        key: 'block',
+        label: 'Tòa',
+        value: aptFilterBlock,
+        display: aptFilterBlock ? `Tòa ${aptFilterBlock}` : 'Tất cả',
+        options: [
+          { value: '', label: 'Tất cả' },
+          ...meterApartmentBlocks.map((block) => ({ value: block, label: `Tòa ${block}` })),
+        ],
+        onSelect: (value) => {
+          setAptFilterBlock(value);
+          setAptFilterFloor('');
+        },
+      },
+      {
+        key: 'floor',
+        label: 'Tầng',
+        value: aptFilterFloor,
+        display: aptFilterFloor ? `Tầng ${aptFilterFloor}` : 'Tất cả',
+        options: [
+          { value: '', label: 'Tất cả' },
+          ...meterApartmentFloors.map((floor) => ({ value: String(floor), label: `Tầng ${floor}` })),
+        ],
+        onSelect: setAptFilterFloor,
+      },
+      {
+        key: 'status',
+        label: 'Trạng thái',
+        value: aptFilterStatus,
+        display: aptFilterStatus ? (apartmentStatusLabel[aptFilterStatus] || aptFilterStatus) : 'Tất cả',
+        options: [
+          { value: '', label: 'Tất cả' },
+          ...meterApartmentStatuses.map((status) => ({ value: status, label: apartmentStatusLabel[status] || status })),
+        ],
+        onSelect: setAptFilterStatus,
+      },
+      {
+        key: 'mode',
+        label: 'Hiển thị',
+        value: meterAptMode,
+        display: METER_APARTMENT_MODES.find((mode) => mode.value === meterAptMode)?.label || 'Tất cả',
+        options: METER_APARTMENT_MODES,
+        onSelect: setMeterAptMode,
+      },
+    ];
+    return (
+      <div className={`page meter-page meter-page--${meterTab}`} id="meter-page">
+        <div className="meter-workbench">
+          <aside className="meter-workbench__sidebar">
+            <div className="meter-sidebar-title">
+              <span>Vận hành chỉ số</span>
+              <h2>Ghi chỉ số điện nước</h2>
+              <p>Quản lý kỳ ghi, lọc căn hộ cần xử lý và mở modal nhập chỉ số từ một hàng đợi duy nhất.</p>
+            </div>
+
+            <div className="meter-sidebar-card">
+              <div className="meter-sidebar-card__head">
+                <strong>Bộ lọc thao tác</strong>
+                <button className="btn btn--ghost btn--sm" onClick={() => fetchMeterReadings()} title="Làm mới">
+                  <span className="btn__icon">{Icons.refresh}</span>
+                  Làm mới
+                </button>
+              </div>
+              <div className="meter-filter-console">
+                <div className="meter-filter-main">
+                  <div className="meter-filter-control meter-filter-control--search">
+                    <label>Tìm căn hộ</label>
+                    <div className="meter-apartment-search">
+                      {Icons.search}
+                      <input
+                        value={meterAptSearch}
+                        onChange={(e) => setMeterAptSearch(e.target.value)}
+                        placeholder="Căn hộ, chủ hộ, người thuê, SĐT..."
+                      />
+                    </div>
+                  </div>
+                  <div className="meter-filter-control meter-filter-control--period">
+                    <label>Kỳ ghi</label>
+                    <div className="meter-period-box">
+                      {Icons.calendar}
+                      <input
+                        type="text"
+                        inputMode="numeric"
+                        maxLength="7"
+                        value={billingPeriodInput}
+                        onChange={(e) => handleBillingPeriodChange(e.target.value)}
+                      />
+                    </div>
+                  </div>
+                </div>
+                <div className="meter-filter-strip">
+                  {meterFilterGroups.map((group) => (
+                    <div
+                      key={group.key}
+                      className="meter-filter-menu-wrap"
+                      onBlur={(event) => {
+                        if (!event.currentTarget.contains(event.relatedTarget)) {
+                          setMeterFilterMenu(null);
+                        }
+                      }}
+                    >
+                      <button
+                        type="button"
+                        className={`meter-filter-pill ${group.value ? 'meter-filter-pill--active' : ''}`}
+                        onClick={() => setMeterFilterMenu((current) => (current === group.key ? null : group.key))}
+                        aria-expanded={meterFilterMenu === group.key}
+                      >
+                        <span>{group.label}</span>
+                        <strong>{group.display}</strong>
+                        {Icons.chevronDown}
+                      </button>
+                      {meterFilterMenu === group.key && (
+                        <div className="meter-filter-menu">
+                          {group.options.map((option) => (
+                            <button
+                              key={String(option.value)}
+                              type="button"
+                              className={String(group.value) === String(option.value) ? 'meter-filter-menu__item meter-filter-menu__item--active' : 'meter-filter-menu__item'}
+                              onClick={() => {
+                                group.onSelect(option.value);
+                                setMeterFilterMenu(null);
+                              }}
+                            >
+                              <span>{option.label}</span>
+                              {String(group.value) === String(option.value) && Icons.check}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                  <button
+                    type="button"
+                    className="meter-filter-reset"
+                    disabled={activeMeterFilterCount === 0}
+                    onClick={() => {
+                      setAptFilterBlock('');
+                      setAptFilterFloor('');
+                      setAptFilterStatus('');
+                      setMeterAptSearch('');
+                      setMeterAptMode('NEED_READING');
+                      setMeterFilterMenu(null);
+                    }}
+                  >
+                    Xóa lọc {activeMeterFilterCount > 0 ? `(${activeMeterFilterCount})` : ''}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </aside>
+
+          <main className="meter-workbench__main">
+            <section className="meter-panel meter-filter-panel meter-queue-panel">
+              <div className="meter-panel-head meter-panel-head--queue">
+                <div>
+                  <span className="meter-step-badge">1</span>
+                  <strong>Hàng đợi căn hộ cần ghi</strong>
+                </div>
+                <p>
+                  Kỳ {billingPeriodInput || 'MM/yyyy'} · {meterFilteredApartments.length} căn hộ phù hợp
+                  {(periodInvoicesLoading || periodMeterReadingsLoading) ? ' · Đang kiểm tra dữ liệu kỳ này' : ''}
+                </p>
+              </div>
+              <div className="meter-apartment-picker" id="meter-field-apartmentId">
+            <div className="meter-apartment-picker__head">
+              <div>
+                <label className="form-label meter-label"><span>{Icons.home}</span> Hàng đợi căn hộ <span className="form-required">*</span></label>
+                <p>Bấm vào một dòng để mở modal ghi chỉ số. Căn đã ghi trong kỳ sẽ tự khóa.</p>
+              </div>
+              <span>{meterFilteredApartments.length} kết quả</span>
+            </div>
+            <div className="meter-apartment-card-grid">
+              {meterApartmentRows.length === 0 ? (
+                <div className="meter-apartment-empty">
+                  Không tìm thấy căn hộ phù hợp. Hãy kiểm tra lại bộ lọc hoặc từ khóa tìm kiếm.
+                </div>
+              ) : (
+                <>
+                  <div className="meter-apartment-list__header">
+                    <span />
+                    <span>Căn hộ</span>
+                    <span>Chủ hộ / người thuê</span>
+                    <span>Trạng thái</span>
+                    <span>Thao tác</span>
+                  </div>
+                  {meterApartmentRows.map((apt) => {
+                const owner = getApartmentOwner(apt);
+                const tenant = getApartmentTenant(apt);
+                const selected = String(readingForm.apartmentId) === String(apt.id);
+                const periodReading = meterReadingPeriodByApartmentId.get(String(apt.id));
+                const periodInvoice = invoicePeriodByApartmentId.get(String(apt.id));
+                const hasPeriodReading = Boolean(periodReading);
+                const hasPeriodInvoice = Boolean(periodInvoice);
+                const actionStatus = hasPeriodReading
+                  ? 'Đã ghi kỳ này'
+                  : hasPeriodInvoice
+                    ? 'Cần ghi'
+                    : 'Chưa ghi chỉ số';
+                const statusTone = apt.apartmentStatus === 'OCCUPIED'
+                  ? 'occupied'
+                  : apt.apartmentStatus === 'VACANT'
+                    ? 'vacant'
+                    : apt.apartmentStatus === 'UNDER_MAINTENANCE'
+                      ? 'maintenance'
+                      : 'default';
+
+                return (
+                  <button
+                    key={apt.id}
+                    type="button"
+                    className={`meter-apartment-card ${selected ? 'meter-apartment-card--selected' : ''} ${hasPeriodReading ? 'meter-apartment-card--recorded' : ''} ${!hasPeriodInvoice ? 'meter-apartment-card--needs-invoice' : ''}`}
+                    disabled={hasPeriodReading}
+                    title={hasPeriodReading ? `Căn hộ đã ghi chỉ số kỳ ${billingPeriodInput}` : 'Mở modal ghi chỉ số'}
+                    onClick={() => {
+                      if (!hasPeriodReading) openMeterEntryModal(apt);
+                    }}
+                  >
+                    <span className={`meter-apartment-card__check ${selected ? 'meter-apartment-card__check--active' : ''}`}>
+                      {selected ? Icons.check : null}
+                    </span>
+                    <span className="meter-apartment-card__main">
+                      <strong>Căn {apt.apartmentNumber}</strong>
+                      <small>
+                        {[
+                          apt.block ? `Tòa ${apt.block}` : '',
+                          apt.floor != null ? `Tầng ${apt.floor}` : '',
+                          apt.area ? `${apt.area}m²` : '',
+                        ].filter(Boolean).join(' · ') || 'Chưa có vị trí'}
+                      </small>
+                    </span>
+                    <span className="meter-apartment-card__people">
+                      {owner && <span>Chủ: {owner.fullName}{getResidentPhone(owner) ? ` · ${getResidentPhone(owner)}` : ''}</span>}
+                      {tenant && <span>Thuê: {tenant.fullName}{getResidentPhone(tenant) ? ` · ${getResidentPhone(tenant)}` : ''}</span>}
+                    </span>
+                    <span className="meter-apartment-card__badges">
+                      <span className={`meter-apartment-card__status meter-apartment-card__status--${statusTone}`}>
+                        {apartmentStatusLabel[apt.apartmentStatus] || apt.apartmentStatus || '—'}
+                      </span>
+                      <span className={`meter-apartment-card__period ${hasPeriodReading ? 'meter-apartment-card__period--recorded' : (!hasPeriodInvoice ? 'meter-apartment-card__period--no-invoice' : 'meter-apartment-card__period--todo')}`}>
+                        {actionStatus}
+                      </span>
+                    </span>
+                    <span className="meter-apartment-card__action">
+                      {hasPeriodReading ? 'Đã khóa' : 'Ghi chỉ số'}
+                    </span>
+                  </button>
+                );
+              })}
+                </>
+              )}
+            </div>
+            <div className="meter-apartment-pagination">
+              <span className="meter-apartment-pagination__range">
+                {meterFilteredApartments.length === 0
+                  ? '0 kết quả'
+                  : `Hiển thị ${safeMeterAptPage * METER_APARTMENT_PAGE_SIZE + 1}-${Math.min((safeMeterAptPage + 1) * METER_APARTMENT_PAGE_SIZE, meterFilteredApartments.length)} / ${meterFilteredApartments.length} căn hộ`}
+              </span>
+              <div className="meter-apartment-pagination__controls">
+                <button type="button" disabled={safeMeterAptPage <= 0} onClick={() => setMeterAptPage((p) => Math.max(0, p - 1))}>{Icons.chevronLeft}</button>
+                <strong>Trang {safeMeterAptPage + 1} / {meterApartmentPageCount}</strong>
+                <button type="button" disabled={safeMeterAptPage >= meterApartmentPageCount - 1} onClick={() => setMeterAptPage((p) => Math.min(meterApartmentPageCount - 1, p + 1))}>{Icons.chevronRight}</button>
+              </div>
+            </div>
+              </div>
+            </section>
+
+        {meterEntryModalOpen && selectedApartment && (
+          <div className="modal-overlay" onClick={closeMeterEntryModal}>
+            <form className="modal meter-entry-modal" onClick={(e) => e.stopPropagation()} onSubmit={handleReadingSubmit}>
+              <div className="modal__header meter-entry-modal__header">
+                <div>
+                  <h3 className="modal__title">Ghi chỉ số {getApartmentLabel(selectedApartment)}</h3>
+                  <p className="meter-entry-modal__subtitle">Kỳ {billingPeriodInput || 'MM/yyyy'} · {apartmentStatusLabel[selectedApartment.apartmentStatus] || selectedApartment.apartmentStatus || '—'}</p>
+                </div>
+                <button type="button" className="modal__close" onClick={closeMeterEntryModal}>
+                  {Icons.close}
+                </button>
+              </div>
+
+              <div className="modal__body meter-entry-modal__body">
+                <div className="meter-entry-summary">
+                  <div>
+                    <span>Căn hộ</span>
+                    <strong>{getApartmentLabel(selectedApartment)}</strong>
+                  </div>
+                  <div>
+                    <span>Diện tích</span>
+                    <strong>{selectedApartment.area ? `${selectedApartment.area}m²` : '—'}</strong>
+                  </div>
+                  <div>
+                    <span>Kỳ ghi</span>
+                    <strong>{billingPeriodInput || 'MM/yyyy'}</strong>
+                  </div>
+                  <div>
+                    <span>Trạng thái kỳ</span>
+                    <strong>{selectedPeriodReading ? 'Đã ghi' : 'Chưa ghi chỉ số'}</strong>
+                  </div>
+                </div>
+
+                {selectedPeriodReading && (
+                  <div className="meter-period-lock">
+                    Căn hộ này đã có bản ghi chỉ số kỳ {billingPeriodInput}. Hệ thống đã khóa nhập mới cho kỳ này.
+                  </div>
+                )}
+
+                <div className="meter-entry-modal__content">
+                  <div className="meter-entry-modal__form">
+                    <div className="meter-reading-cards meter-reading-cards--modal">
+                      {meterCards.map((meter) => {
+                        const currentValue = Number(meter.formValue || 0);
+                        const previousValue = Number(meter.previous || 0);
+                        const draftUsage = meter.formValue ? Math.max(0, currentValue - previousValue) : null;
+                        return (
+                          <div key={meter.key} className={`meter-reading-card meter-reading-card--${meter.key}`}>
+                            <div className="meter-reading-card__head">
+                              <span>{meter.icon}</span>
+                              <div>
+                                <strong>{meter.title}</strong>
+                                <small>Đơn vị: {meter.unit}</small>
+                              </div>
+                            </div>
+                            <div className="meter-reading-card__baseline">
+                              <span>Kỳ trước</span>
+                              <strong>{formatInputCurrency(meter.previous || 0)} {meter.unit}</strong>
+                            </div>
+                            <div className="form-field meter-field">
+                              <label className="form-label">Chỉ số hiện tại</label>
+                              <div className="meter-reading-input">
+                                <input
+                                  className="form-input"
+                                  inputMode="numeric"
+                                  value={formatInputCurrency(meter.formValue)}
+                                  onChange={(e) => handleReadingFormChange(meter.currentField, parseInputCurrency(e.target.value))}
+                                  disabled={Boolean(selectedPeriodReading)}
+                                />
+                                <span>{meter.unit}</span>
+                              </div>
+                            </div>
+                            <div className={`meter-reading-card__usage ${draftUsage != null ? 'meter-reading-card__usage--ready' : ''}`}>
+                              <span>Tiêu thụ tạm tính</span>
+                              <strong>{draftUsage != null ? `+${formatInputCurrency(draftUsage)} ${meter.unit}` : 'Chưa nhập'}</strong>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+
+                    <div className="meter-form-grid meter-form-grid--support meter-form-grid--modal">
+                      <div className="form-field meter-field meter-field--full">
+                        <label className="form-label meter-label"><span>{Icons.image}</span> Ảnh kiểm chứng</label>
+                        <div className="meter-evidence-grid">
+                          {[
+                            { id: 'meter-entry-electric-evidence', field: 'electricFile', label: 'Ảnh chỉ số điện', icon: Icons.zap },
+                            { id: 'meter-entry-water-evidence', field: 'waterFile', label: 'Ảnh chỉ số nước', icon: Icons.droplet },
+                          ].map((evidence) => {
+                            const selectedFile = readingForm[evidence.field];
+                            return (
+                              <div key={evidence.field} className="meter-evidence-picker">
+                                <span className="meter-evidence-picker__label">{evidence.icon} {evidence.label}</span>
+                                <div className="meter-file-picker">
+                                  <input
+                                    id={evidence.id}
+                                    key={selectedFile ? `${evidence.field}-set` : `${evidence.field}-empty`}
+                                    type="file"
+                                    accept="image/*"
+                                    disabled={Boolean(selectedPeriodReading)}
+                                    onChange={(event) => handleReadingFormChange(evidence.field, event.target.files?.[0] || null)}
+                                  />
+                                  <label htmlFor={evidence.id}>
+                                    <span>{Icons.image}</span>
+                                    Chọn ảnh
+                                  </label>
+                                  <span title={selectedFile?.name || ''}>{selectedFile?.name || 'Chưa chọn ảnh'}</span>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                      <div className="form-field meter-field meter-field--full">
+                        <label className="form-label meter-label"><span>{Icons.note}</span> Ghi chú</label>
+                        <textarea className="form-input meter-note" rows="3" value={readingForm.note} onChange={(e) => handleReadingFormChange('note', e.target.value)} disabled={Boolean(selectedPeriodReading)} placeholder="VD: Đồng hồ bị mờ, cần đối chiếu lại..." />
+                      </div>
+                    </div>
+                  </div>
+
+                  <aside className="meter-entry-preview">
+                    <strong>Đối chiếu nhanh</strong>
+                    {!readingForm.apartmentId ? (
+                      <div className="meter-help-empty">Chọn căn hộ để xem chỉ số nền.</div>
+                    ) : meterPreviewInfo.loading ? (
+                      <div className="page__loading" style={{ minHeight: 80 }}><div className="spinner" /><span>Đang tải...</span></div>
+                    ) : meterPreviewInfo.error ? (
+                      <p className="meter-error">{meterPreviewInfo.error}</p>
+                    ) : (
+                      <div className="meter-preview-list">
+                        {meterCards.map((meter) => (
+                          <div key={meter.key} className={`meter-stat meter-stat--${meter.key}`}>
+                            <span>{meter.title}</span>
+                            <strong>{formatInputCurrency(meter.previous || 0)} <small>{meter.unit}</small></strong>
+                            <p>Gần nhất: {formatInputCurrency(meter.current || 0)} {meter.unit} · Tiêu thụ +{formatInputCurrency(meter.quantity || 0)} {meter.unit}</p>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </aside>
+                </div>
+              </div>
+
+              <div className="modal__footer meter-entry-modal__footer">
+                <button type="button" className="btn btn--ghost" onClick={closeMeterEntryModal}>Đóng</button>
+                <button type="submit" className="btn btn--primary meter-submit" disabled={readingSubmitting || Boolean(selectedPeriodReading)}>
+                  {selectedPeriodReading ? 'Đã khóa kỳ này' : (readingSubmitting ? 'Đang lưu...' : 'Lưu chỉ số')}
+                </button>
+              </div>
+            </form>
+          </div>
+        )}
+
+        <section className="meter-panel meter-history-shell">
+          <div className="meter-history-shell__head">
+            <div>
+              <span className="meter-step-badge">2</span>
+              <strong>Lịch sử ghi chỉ số</strong>
+            </div>
+            <div className="meter-tabs">
+          {[
+            { key: 'electric', label: 'Chỉ số điện', icon: Icons.zap },
+            { key: 'water', label: 'Chỉ số nước', icon: Icons.droplet },
+          ].map((tab) => (
+            <button
+              key={tab.key}
+              type="button"
+              onClick={() => setMeterTab(tab.key)}
+              className={`meter-tab meter-tab--${tab.key} ${meterTab === tab.key ? 'meter-tab--active' : ''}`}
+            >
+              <span className="meter-tab__icon">{tab.icon}</span>
+              <span>{tab.label}</span>
+            </button>
+          ))}
+            </div>
+          </div>
+
+        {/* ── History Table ── */}
+        <div className="page__table-wrapper meter-history">
+          <div className="meter-history__header">
+            <span>{Icons.clipboard}</span>
+            <h3>Lịch sử ghi chỉ số {isElectricTab ? 'điện' : 'nước'}</h3>
+          </div>
+          {meterReadingsLoading ? (
+            <div className="page__loading"><div className="spinner" /><span>Đang tải lịch sử...</span></div>
+          ) : visibleMeterReadings.length === 0 ? (
+            <div className="meter-empty-state">
+              <span>{Icons.clipboard}</span>
+              <p>Chưa có lịch sử ghi chỉ số</p>
+            </div>
+          ) : (
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>Căn hộ</th>
+                  <th>Kỳ</th>
+                  <th>Trước</th>
+                  <th>Sau</th>
+                  <th>Tiêu thụ</th>
+                  <th>Nguồn</th>
+                  <th>Ảnh</th>
+                  <th>Thời gian</th>
+                </tr>
+              </thead>
+              <tbody>
+                {visibleMeterReadings.map((r) => {
+                  const prev = isElectricTab ? r.electricPreviousReading : r.waterPreviousReading;
+                  const curr = isElectricTab ? r.electricCurrentReading : r.waterCurrentReading;
+                  const qty = isElectricTab ? r.electricQuantity : r.waterQuantity;
+                  const unit = isElectricTab ? 'kWh' : 'm³';
+                  const evidenceType = isElectricTab ? 'electric' : 'water';
+                  const evidenceUrl = isElectricTab
+                    ? (r.electricEvidenceUrl || r.evidenceUrl)
+                    : (r.waterEvidenceUrl || r.evidenceUrl);
+                  return (
+                    <tr key={r.meterReadingId}>
+                      <td>{getApartmentLabel(r.apartment)}</td>
+                      <td>{formatBillingPeriodDisplay(r.billingPeriod) || '—'}</td>
+                      <td>{formatInputCurrency(prev || 0)} {unit}</td>
+                      <td style={{ fontWeight: 600 }}>{formatInputCurrency(curr)} {unit}</td>
+                      <td>
+                        <span style={{
+                          padding: '2px 8px', borderRadius: 6, fontSize: '0.8rem', fontWeight: 600,
+                          background: isElectricTab ? '#fef3c7' : '#e0f2fe',
+                          color: isElectricTab ? '#92400e' : '#0369a1',
+                        }}>
+                          +{formatInputCurrency(qty || 0)} {unit}
+                        </span>
+                      </td>
+                      <td>{r.source === 'MANUAL' ? 'Ghi tay' : 'Mock API'}</td>
+                      <td>
+                        {evidenceUrl ? (
+                          <button type="button" className="btn btn--ghost btn--sm" onClick={() => handleOpenEvidence(r, evidenceType)}>Xem ảnh</button>
+                        ) : '—'}
+                      </td>
+                      <td>{formatDateTime(r.recordedAt)}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          )}
+        </div>
+        </section>
+          </main>
+        </div>
+      </div>
+    );
+  }
 
   /* ─── render ─── */
   return (
@@ -1180,7 +2739,7 @@ export default function InvoicesPage() {
                   {row.label}
                 </div>
                 <div style={{ fontSize: '0.95rem', fontWeight: 600, color: '#1d4ed8' }}>
-                  {row.isTiered ? 'Lũy tiến (Bậc thang)' : `${shortMoney(row.value)}/${row.unit}`}
+                  {row.isTiered ? 'Lũy tiến (Bậc thang)' : row.isVehicle ? row.value : `${shortMoney(row.value)}/${row.unit}`}
                 </div>
               </div>
             ))}
@@ -1308,11 +2867,12 @@ export default function InvoicesPage() {
                     </td>
                     <td>
                       <div className="action-btns">
-                        <button className="action-btn action-btn--view" title="Xem" onClick={() => openViewModal(inv)}>{Icons.eye}</button>
+                        <button className="action-btn action-btn--view" data-tooltip="Xem chi tiết" aria-label="Xem chi tiết" onClick={() => openViewModal(inv)}>{Icons.eye}</button>
                         {(inv.invoiceStatus === 'UNPAID' || inv.invoiceStatus === 'OVERDUE') ? (
                           <button
                             className="action-btn"
-                            title="Thanh toán"
+                            data-tooltip="Thanh toán"
+                            aria-label="Thanh toán"
                             onClick={() => openPaymentModal(inv.invoiceId)}
                             style={{ color: '#16a34a', background: '#dcfce7' }}
                           >
@@ -1321,7 +2881,8 @@ export default function InvoicesPage() {
                         ) : (
                           <button
                             className="action-btn"
-                            title="Đã thanh toán"
+                            data-tooltip="Đã thanh toán"
+                            aria-label="Đã thanh toán"
                             disabled
                             style={{ color: '#a3e635', background: '#f0fdf4', opacity: 0.5, cursor: 'default' }}
                           >
@@ -1331,7 +2892,8 @@ export default function InvoicesPage() {
                         {pendingCashPayment && (
                           <button
                             className="action-btn"
-                            title="Xác nhận thanh toán tiền mặt"
+                            data-tooltip="Xác nhận tiền mặt"
+                            aria-label="Xác nhận thanh toán tiền mặt"
                             disabled={paySubmitting}
                             onClick={() => handleConfirmCashPayment(pendingCashPayment.paymentId)}
                             style={{ color: '#16a34a', background: '#dcfce7' }}
@@ -1339,11 +2901,11 @@ export default function InvoicesPage() {
                             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" style={{ width: 16, height: 16 }}><polyline points="20 6 9 17 4 12" /></svg>
                           </button>
                         )}
-                        <button className="action-btn" title="Xuất PDF" onClick={() => handleExportPDF(inv)} style={{ color: '#dc2626', background: '#fee2e2' }}>
+                        <button className="action-btn" data-tooltip="Xuất PDF" aria-label="Xuất PDF" onClick={() => handleExportPDF(inv)} style={{ color: '#dc2626', background: '#fee2e2' }}>
                           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ width: 16, height: 16 }}><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><polyline points="14 2 14 8 20 8" /><line x1="16" y1="13" x2="8" y2="13" /><line x1="16" y1="17" x2="8" y2="17" /></svg>
                         </button>
-                        <button className="action-btn action-btn--edit" title="Sửa" onClick={() => openEditModal(inv)}>{Icons.edit}</button>
-                        <button className="action-btn action-btn--delete" title="Xóa" onClick={() => openDeleteModal(inv)}>{Icons.trash}</button>
+                        <button className="action-btn action-btn--edit" data-tooltip="Chỉnh sửa" aria-label="Chỉnh sửa" onClick={() => openEditModal(inv)}>{Icons.edit}</button>
+                        <button className="action-btn action-btn--delete" data-tooltip="Xóa" aria-label="Xóa" onClick={() => openDeleteModal(inv)}>{Icons.trash}</button>
                       </div>
                     </td>
                   </tr>
@@ -1378,52 +2940,24 @@ export default function InvoicesPage() {
       )}
 
       {/* ═══════════ CREATE / EDIT INVOICE MODAL ═══════════ */}
-      {modalOpen && (modalMode === 'create' || modalMode === 'edit') && (
-        <div className="modal-overlay" onClick={() => setModalOpen(false)}>
-          <div className="modal" style={{ maxWidth: '850px', width: '95%' }} onClick={(e) => e.stopPropagation()}>
+      {modalOpen && (modalMode === 'create' || modalMode === 'edit') && createPortal((
+        <div className="modal-overlay invoice-create-overlay" onClick={() => setModalOpen(false)}>
+          <div className="modal modal--invoice invoice-create-modal" onClick={(e) => e.stopPropagation()}>
             <div className="modal__header">
               <h3 className="modal__title">{modalMode === 'create' ? 'Tạo hóa đơn mới' : 'Chỉnh sửa hóa đơn'}</h3>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+              <div className="invoice-create-modal__header-actions">
                 {tableFees.length > 0 && (
-                  <div style={{ position: 'relative' }}>
+                  <div className="invoice-create-fee-menu">
                     <button
                       type="button"
                       onClick={() => setModalFeeDropdownOpen(!modalFeeDropdownOpen)}
-                      style={{
-                        padding: '0.5rem 0.75rem',
-                        borderRadius: '6px',
-                        border: '2px solid #8b5cf6',
-                        background: '#fff',
-                        color: '#1e293b',
-                        fontSize: '0.8rem',
-                        fontWeight: 600,
-                        cursor: 'pointer',
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: '0.5rem',
-                        transition: 'all 0.2s ease',
-                        width: '280px',
-                        whiteSpace: 'nowrap',
-                        overflow: 'hidden',
-                        textOverflow: 'ellipsis',
-                      }}
+                      className="invoice-create-fee-trigger"
                     >
-                      {tableFees[selectedFeeIndex]?.title || 'Chọn bảng phí'}
-                      <svg style={{ width: '1rem', height: '1rem', transform: modalFeeDropdownOpen ? 'rotate(180deg)' : 'rotate(0deg)', transition: 'transform 0.2s' }} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="6 9 12 15 18 9"></polyline></svg>
+                      <span>{tableFees[selectedFeeIndex]?.title || 'Chọn bảng phí'}</span>
+                      <svg className={modalFeeDropdownOpen ? 'is-open' : ''} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="6 9 12 15 18 9"></polyline></svg>
                     </button>
                     {modalFeeDropdownOpen && (
-                      <div style={{
-                        position: 'absolute',
-                        top: '100%',
-                        right: 0,
-                        marginTop: '0.5rem',
-                        background: '#fff',
-                        border: '1px solid #e2e8f0',
-                        borderRadius: '8px',
-                        boxShadow: '0 10px 25px rgba(0,0,0,0.15)',
-                        zIndex: 100,
-                        minWidth: '250px',
-                      }}>
+                      <div className="invoice-create-fee-dropdown">
                         {tableFees.map((fee, idx) => (
                           <button
                             key={idx}
@@ -1432,26 +2966,7 @@ export default function InvoicesPage() {
                               setSelectedFeeIndex(idx);
                               setModalFeeDropdownOpen(false);
                             }}
-                            style={{
-                              display: 'block',
-                              width: '100%',
-                              padding: '0.75rem 1rem',
-                              textAlign: 'left',
-                              border: 'none',
-                              background: selectedFeeIndex === idx ? '#fef3c7' : 'transparent',
-                              color: selectedFeeIndex === idx ? '#d97706' : '#1e293b',
-                              fontSize: '0.85rem',
-                              cursor: 'pointer',
-                              transition: 'background 0.15s ease',
-                              borderBottom: idx < tableFees.length - 1 ? '1px solid #e2e8f0' : 'none',
-                              fontWeight: selectedFeeIndex === idx ? 700 : 500,
-                            }}
-                            onMouseEnter={(e) => {
-                              if (selectedFeeIndex !== idx) e.target.style.background = '#f8fafc';
-                            }}
-                            onMouseLeave={(e) => {
-                              if (selectedFeeIndex !== idx) e.target.style.background = 'transparent';
-                            }}
+                            className={`invoice-create-fee-option ${selectedFeeIndex === idx ? 'invoice-create-fee-option--active' : ''}`}
                           >
                             {fee.title || 'Bảng phí ' + (idx + 1)}
                           </button>
@@ -1463,35 +2978,186 @@ export default function InvoicesPage() {
                 <button className="modal__close" onClick={() => setModalOpen(false)}>{Icons.close}</button>
               </div>
             </div>
-            <form onSubmit={handleSubmit} className="modal__body">
+            <form onSubmit={handleSubmit} className="modal__body invoice-wizard">
+              <div className="invoice-stepper">
+                {invoiceSteps.map((step, idx) => {
+                  const blockReason = getInvoiceStepBlockReason(idx);
+                  return (
+                    <button
+                      key={step.key}
+                      type="button"
+                      className={`invoice-stepper__item ${idx === invoiceStep ? 'invoice-stepper__item--active' : ''} ${idx < invoiceStep ? 'invoice-stepper__item--done' : ''} ${blockReason ? 'invoice-stepper__item--locked' : ''}`}
+                      onClick={() => goToInvoiceStep(idx)}
+                      title={blockReason || step.label}
+                    >
+                      <span className="invoice-stepper__icon">{step.icon}</span>
+                      <span className="invoice-stepper__text">
+                        <small>Bước {idx + 1}</small>
+                        <strong>{step.label}</strong>
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
               <div className="form-grid">
                 {/* 1. Apartment selection (create only) */}
-                {modalMode === 'create' && (
+                {modalMode === 'create' && isInvoiceStep('apartment') && (
                   <div className="form-field form-field--full" style={{ padding: 0, background: '#ffffff', borderRadius: '8px', border: '1px solid #cbd5e1', marginBottom: 0, boxShadow: '0 2px 4px rgba(0,0,0,0.02)' }}>
                     <div style={{ background: 'linear-gradient(135deg, #eef2ff, #e0e7ff)', padding: '0.85rem 1.25rem', borderBottom: '1px solid #cbd5e1', fontWeight: 600, color: '#3730a3', fontSize: '0.95rem', display: 'flex', alignItems: 'center', gap: '0.5rem', borderRadius: '8px 8px 0 0' }}>
                       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ width: 18, height: 18 }}><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" /><polyline points="9 22 9 12 15 12 15 22" /></svg>
                       Chọn căn hộ <span className="form-required">*</span>
                     </div>
-                    <div style={{ padding: '1.25rem' }} id="invoice-field-apartmentId">
-                      <SearchableSelect
-                        options={apartments.map(apt => ({
-                          value: apt.id,
-                          label: `Căn ${apt.apartmentNumber}`,
-                          sub: `${apt.block ? `Tòa ${apt.block} · ` : ''}Tầng ${apt.floor}${apt.area ? ` · ${apt.area}m²` : ''}`,
-                        }))}
-                        value={formData.apartmentId}
-                        onChange={(val) => handleFormChange('apartmentId', val)}
-                        placeholder="Tìm kiếm căn hộ..."
-                        error={formErrors.apartmentId}
-                      />
+                    <div className="invoice-apartment-picker" id="invoice-field-apartmentId">
+                      <div className="invoice-apartment-toolbar">
+                        <div className="invoice-apartment-search">
+                          {Icons.search}
+                          <input
+                            value={aptModalSearch}
+                            onChange={(e) => setAptModalSearch(e.target.value)}
+                            placeholder="Tìm căn hộ, cư dân, số điện thoại..."
+                          />
+                        </div>
+                        <DropdownSelect
+                          value={aptFilterBlock}
+                          onChange={(value) => {
+                            setAptFilterBlock(value);
+                            setAptFilterFloor('');
+                          }}
+                          options={[
+                            { value: '', label: 'Tất cả tòa' },
+                            ...apartmentBlocks.map((block) => ({ value: block, label: `Tòa ${block}` })),
+                          ]}
+                        />
+                        <DropdownSelect
+                          value={aptFilterFloor}
+                          onChange={(value) => setAptFilterFloor(value)}
+                          options={[
+                            { value: '', label: 'Tất cả tầng' },
+                            ...apartmentFloors.map((floor) => ({ value: floor, label: `Tầng ${floor}` })),
+                          ]}
+                        />
+                        <DropdownSelect
+                          value={aptFilterStatus}
+                          onChange={(value) => setAptFilterStatus(value)}
+                          options={[
+                            { value: '', label: 'Tất cả trạng thái' },
+                            ...apartmentStatuses.map((status) => ({ value: status, label: apartmentStatusLabel[status] || status })),
+                          ]}
+                        />
+                        {(aptFilterBlock || aptFilterFloor || aptFilterStatus || aptModalSearch) && (
+                          <button
+                            type="button"
+                            className="btn btn--ghost btn--sm"
+                            onClick={() => {
+                              setAptFilterBlock('');
+                              setAptFilterFloor('');
+                              setAptFilterStatus('');
+                              setAptModalSearch('');
+                            }}
+                          >
+                            Xóa lọc
+                          </button>
+                        )}
+                      </div>
                       {formErrors.apartmentId && <span className="form-error" style={{ marginTop: 4 }}>{formErrors.apartmentId}</span>}
+                      <div className="invoice-apartment-table-wrap">
+                        <table className="invoice-apartment-table">
+                          <thead>
+                            <tr>
+                              <th style={{ width: 54 }}>Chọn</th>
+                              <th>Căn hộ</th>
+                              <th>Vị trí</th>
+                              <th>Cư dân</th>
+                              <th>Diện tích</th>
+                              <th>Trạng thái</th>
+                              <th>Hóa đơn kỳ</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {modalApartmentRows.length === 0 ? (
+                              <tr>
+                                <td colSpan="7" className="invoice-apartment-empty">Không tìm thấy căn hộ phù hợp</td>
+                              </tr>
+                            ) : modalApartmentRows.map((apt) => {
+                              const owner = getApartmentOwner(apt);
+                              const tenant = getApartmentTenant(apt);
+                              const isSelected = String(formData.apartmentId) === String(apt.id);
+                              const existingInvoice = invoicePeriodByApartmentId.get(String(apt.id));
+                              const hasInvoiceInPeriod = !!existingInvoice;
+                              const statusTone = apt.apartmentStatus === 'OCCUPIED'
+                                ? 'occupied'
+                                : apt.apartmentStatus === 'VACANT'
+                                  ? 'vacant'
+                                  : apt.apartmentStatus === 'UNDER_MAINTENANCE'
+                                    ? 'maintenance'
+                                    : 'default';
+                              return (
+                                <tr
+                                  key={apt.id}
+                                  className={`${isSelected ? 'invoice-apartment-table__row--selected' : ''} ${hasInvoiceInPeriod ? 'invoice-apartment-table__row--has-invoice' : ''}`}
+                                  onClick={() => handleFormChange('apartmentId', apt.id)}
+                                >
+                                  <td>
+                                    <span className={`invoice-apartment-radio ${isSelected ? 'invoice-apartment-radio--checked' : ''}`} />
+                                  </td>
+                                  <td>
+                                    <span className="invoice-apartment-main">Căn {apt.apartmentNumber}</span>
+                                    <span className="invoice-apartment-meta">{apt.block ? `Tòa ${apt.block}` : 'Chưa có tòa'}</span>
+                                  </td>
+                                  <td>
+                                    <span className="invoice-apartment-main">{apt.floor != null ? `Tầng ${apt.floor}` : 'Chưa có tầng'}</span>
+                                    <span className="invoice-apartment-meta">{apt.block ? `Block ${apt.block}` : '—'}</span>
+                                  </td>
+                                  <td>
+                                    <span className="invoice-apartment-main">{owner?.fullName || tenant?.fullName || 'Chưa có cư dân'}</span>
+                                    <span className="invoice-apartment-meta">{owner?.phone || tenant?.phone || '—'}</span>
+                                  </td>
+                                  <td>
+                                    <span className="invoice-apartment-main">{apt.area ? `${apt.area} m²` : '—'}</span>
+                                  </td>
+                                  <td>
+                                    <span className={`invoice-apartment-status invoice-apartment-status--${statusTone}`}>{apartmentStatusLabel[apt.apartmentStatus] || apt.apartmentStatus || '—'}</span>
+                                  </td>
+                                  <td>
+                                    {hasInvoiceInPeriod ? (
+                                      <span className="invoice-apartment-invoice-cell">
+                                        <span className="invoice-apartment-invoice-badge">Đã có</span>
+                                        {existingInvoice?.invoiceNumber && (
+                                          <span className="invoice-apartment-invoice-code">{existingInvoice.invoiceNumber}</span>
+                                        )}
+                                      </span>
+                                    ) : (
+                                      <span className="invoice-apartment-empty-mark">—</span>
+                                    )}
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                      <div className="invoice-apartment-footer">
+                        <span>
+                          {selectedModalApartment
+                            ? `Đã chọn: Căn ${selectedModalApartment.apartmentNumber}`
+                            : `${modalFilteredApartments.length} / ${apartments.length} căn hộ`}
+                          {periodInvoicesLoading ? ` · Đang kiểm tra hóa đơn kỳ ${modalInvoicePeriodLabel}` : ''}
+                        </span>
+                        <div className="invoice-apartment-pagination">
+                          <button type="button" disabled={safeAptModalPage <= 0} onClick={() => setAptModalPage(0)}>«</button>
+                          <button type="button" disabled={safeAptModalPage <= 0} onClick={() => setAptModalPage((p) => Math.max(0, p - 1))}>{Icons.chevronLeft}</button>
+                          <strong>{safeAptModalPage + 1} / {modalApartmentPageCount}</strong>
+                          <button type="button" disabled={safeAptModalPage >= modalApartmentPageCount - 1} onClick={() => setAptModalPage((p) => Math.min(modalApartmentPageCount - 1, p + 1))}>{Icons.chevronRight}</button>
+                          <button type="button" disabled={safeAptModalPage >= modalApartmentPageCount - 1} onClick={() => setAptModalPage(modalApartmentPageCount - 1)}>»</button>
+                        </div>
+                      </div>
                     </div>
                   </div>
                 )}
-
                 {/* 2. Invoice Info */}
-                <div className="form-field form-field--full" style={{ padding: 0, background: '#ffffff', borderRadius: '8px', border: '1px solid #cbd5e1', marginBottom: 0, overflow: 'hidden', boxShadow: '0 2px 4px rgba(0,0,0,0.02)' }}>
-                  <div style={{ background: 'linear-gradient(135deg, #ecfdf5, #d1fae5)', padding: '0.85rem 1.25rem', borderBottom: '1px solid #a7f3d0', fontWeight: 600, color: '#065f46', fontSize: '0.95rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                {isInvoiceStep('info') && (
+                <div className="form-field form-field--full" style={{ padding: 0, background: '#ffffff', borderRadius: '8px', border: '1px solid #cbd5e1', marginBottom: 0, boxShadow: '0 2px 4px rgba(0,0,0,0.02)' }}>
+                  <div style={{ background: 'linear-gradient(135deg, #ecfdf5, #d1fae5)', padding: '0.85rem 1.25rem', borderBottom: '1px solid #a7f3d0', fontWeight: 600, color: '#065f46', fontSize: '0.95rem', display: 'flex', alignItems: 'center', gap: '0.5rem', borderRadius: '8px 8px 0 0' }}>
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ width: 18, height: 18 }}><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><polyline points="14 2 14 8 20 8" /><line x1="16" y1="13" x2="8" y2="13" /><line x1="16" y1="17" x2="8" y2="17" /></svg>
                     Thông tin chứng từ
                   </div>
@@ -1525,21 +3191,26 @@ export default function InvoicesPage() {
                     {modalMode === 'edit' && (
                       <div className="form-field" style={{ marginBottom: 0 }}>
                         <label className="form-label">Trạng thái</label>
-                        <select className="form-select" value={formData.invoiceStatus}
-                          onChange={(e) => handleFormChange('invoiceStatus', e.target.value)}>
-                          <option value="UNPAID">Chưa thanh toán</option>
-                          <option value="PAID">Đã thanh toán</option>
-                        </select>
+                        <DropdownSelect
+                          value={formData.invoiceStatus}
+                          onChange={(value) => handleFormChange('invoiceStatus', value)}
+                          options={[
+                            { value: 'UNPAID', label: 'Chưa thanh toán' },
+                            { value: 'PAID', label: 'Đã thanh toán' },
+                          ]}
+                        />
                       </div>
                     )}
                   </div>
                 </div>
+                )}
 
-                {/* 3. Electric & Water Consumption */}
-                <div className="form-field form-field--full" style={{ padding: 0, background: '#ffffff', borderRadius: '8px', border: '1px solid #cbd5e1', marginBottom: 0, overflow: 'hidden', boxShadow: '0 2px 4px rgba(0,0,0,0.02)' }}>
-                  <div style={{ background: 'linear-gradient(135deg, #eff6ff, #dbeafe)', padding: '0.85rem 1.25rem', borderBottom: '1px solid #93c5fd', fontWeight: 600, color: '#1e40af', fontSize: '0.95rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                {/* 3. Electric Consumption */}
+                {isInvoiceStep('electric') && (
+                <div className="form-field form-field--full" style={{ padding: 0, background: '#ffffff', borderRadius: '8px', border: '1px solid #cbd5e1', marginBottom: 0, boxShadow: '0 2px 4px rgba(0,0,0,0.02)' }}>
+                  <div style={{ background: 'linear-gradient(135deg, #eff6ff, #dbeafe)', padding: '0.85rem 1.25rem', borderBottom: '1px solid #93c5fd', fontWeight: 600, color: '#1e40af', fontSize: '0.95rem', display: 'flex', alignItems: 'center', gap: '0.5rem', borderRadius: '8px 8px 0 0' }}>
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ width: 18, height: 18 }}><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" /></svg>
-                    Dịch vụ Điện nước
+                    Dịch vụ Tiền điện
                   </div>
                   <div style={{ padding: '1.25rem' }}>
                     {/* ELECTRIC SECTION */}
@@ -1549,6 +3220,29 @@ export default function InvoicesPage() {
                           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ width: 16, height: 16 }}><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" /></svg>
                           Tính phí điện (Bậc thang)
                         </div>
+                        {modalMode === 'create' && (
+                          <div className="meter-source-panel meter-source-panel--inline">
+                            <div className="meter-source-panel__head">
+                              <div>
+                                <strong>Nguồn chỉ số điện</strong>
+                                <span>Chọn dữ liệu điện dùng để chốt kỳ hóa đơn này.</span>
+                              </div>
+                              <em>{electricMeterSource === 'MOCK_API' ? 'Đang dùng mock API' : 'Đang dùng ghi thủ công'}</em>
+                            </div>
+                            <div className="meter-source-options">
+                              {[
+                                { value: 'MOCK_API', label: 'Mock API', desc: 'Tự lấy chỉ số điện từ EVN mock', icon: Icons.refresh },
+                                { value: 'MANUAL', label: 'Ghi thủ công', desc: 'Dùng chỉ số điện Technician đã ghi', icon: Icons.clipboard },
+                              ].map((option) => (
+                                <button key={option.value} type="button" className={`meter-source-option ${electricMeterSource === option.value ? 'meter-source-option--active' : ''}`} onClick={() => handleElectricMeterSourceSelect(option.value)}>
+                                  <span className="meter-source-option__icon">{option.icon}</span>
+                                  <span><strong>{option.label}</strong><small>{option.desc}</small></span>
+                                  <span className="meter-source-option__radio" />
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                        )}
                         <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1fr) minmax(0,1fr) minmax(0,1fr)', gap: '0.75rem' }}>
                           <div className="form-field" style={{ marginBottom: 0 }}>
                             <label className="form-label" style={{ fontSize: '0.8rem' }}>Từ ngày</label>
@@ -1581,6 +3275,16 @@ export default function InvoicesPage() {
                         </div>
                         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', alignItems: 'end' }}>
                           <div className="form-field" style={{ marginBottom: 0 }}>
+                            <label className="form-label" style={{ fontSize: '0.8rem' }}>Chỉ số điện đầu kỳ</label>
+                            <input type="text" className="form-input" value={formatInputCurrency(formData.electricPreviousReading)} readOnly style={{ background: '#f1f5f9', cursor: 'default' }} />
+                          </div>
+                          <div className="form-field" style={{ marginBottom: 0 }}>
+                            <label className="form-label" style={{ fontSize: '0.8rem' }}>Chỉ số điện cuối kỳ</label>
+                            <input type="text" className="form-input" value={formatInputCurrency(formData.electricCurrentReading)} onChange={(e) => handleFormChange('electricCurrentReading', parseInputCurrency(e.target.value))} placeholder="Nhập chỉ số mới..." />
+                          </div>
+                        </div>
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', alignItems: 'end' }}>
+                          <div className="form-field" style={{ marginBottom: 0 }}>
                             <label className="form-label" style={{ fontSize: '0.8rem' }}>Số điện tiêu thụ (kWh)</label>
                             <input type="text" className="form-input" value={formatInputCurrency(formData.electricQuantity)} onChange={(e) => handleFormChange('electricQuantity', parseInputCurrency(e.target.value))} placeholder="Nhập số điện..." readOnly={!!(!evnMockInfo.loading && evnMockInfo.data)} style={{ background: (!evnMockInfo.loading && evnMockInfo.data) ? '#f1f5f9' : '#fff' }} />
                           </div>
@@ -1597,7 +3301,7 @@ export default function InvoicesPage() {
                           </div>
                         </div>
                         {Number(formData.electricFee) > 0 && (
-                          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginTop: '0.75rem', alignItems: 'end' }}>
+                          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginTop: '0.75rem', paddingBottom: '0.5rem', alignItems: 'end' }}>
                             <div className="form-field" style={{ marginBottom: 0 }}>
                               <label className="form-label" style={{ fontSize: '0.8rem', color: '#d97706' }}>Thuế GTGT (8%)</label>
                               <input type="text" className="form-input" value={formatInputCurrency(Math.round(Number(formData.electricFee) * 0.08))} readOnly style={{ background: '#fefce8', color: '#d97706', cursor: 'default', fontWeight: 600 }} />
@@ -1612,7 +3316,7 @@ export default function InvoicesPage() {
                           <div style={{ fontSize: '0.75rem', fontWeight: 500 }}>
                             {evnMockInfo.loading && <span style={{ color: '#d97706' }}>⏳ Đang kết nối EVN...</span>}
                             {!evnMockInfo.loading && evnMockInfo.error && <span style={{ color: '#dc2626' }}>⚠ {evnMockInfo.error}</span>}
-                            {!evnMockInfo.loading && evnMockInfo.data && <span style={{ color: '#059669' }}>✓ EVN: {evnMockInfo.data.kwhConsumed} kWh · Kỳ {evnMockInfo.data.billingPeriod || 'N/A'}</span>}
+                            {!evnMockInfo.loading && evnMockInfo.data && <span style={{ color: '#059669' }}>✓ {evnMockInfo.data.sourceLabel || 'Mock API'}: {evnMockInfo.data.kwhConsumed || 0} kWh</span>}
                           </div>
                         )}
                       </div>
@@ -1622,87 +3326,251 @@ export default function InvoicesPage() {
                           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ width: 16, height: 16 }}><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" /></svg>
                           Tiền điện
                         </div>
-                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
-                          <div className="form-field" style={{ marginBottom: 0 }}>
-                            <label className="form-label" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>Điện tiêu thụ (kWh) {activeFee && activeFee.electricFee > 0 && <span style={{ color: '#e74c3c', fontSize: '0.8rem', fontWeight: 600 }}>{shortMoney(activeFee.electricFee)}/kWh</span>}</label>
-                            <input type="text" className="form-input" value={formatInputCurrency(formData.electricQuantity)} onChange={(e) => handleFormChange('electricQuantity', parseInputCurrency(e.target.value))} placeholder="Nhập số điện..." />
-                          </div>
-                          <div className="form-field" style={{ marginBottom: 0 }}>
-                            <label className="form-label" style={{ color: '#64748b' }}>Tiền điện chưa thuế</label>
-                            <input type="text" className="form-input" value={formatInputCurrency(formData.electricFee)} readOnly placeholder="Tự động tính" style={{ background: '#f1f5f9', color: '#64748b', cursor: 'default', fontWeight: 600 }} />
-                          </div>
-                        </div>
-                        {Number(formData.electricFee) > 0 && (
-                          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginTop: '0.75rem' }}>
-                            <div className="form-field" style={{ marginBottom: 0 }}>
-                              <label className="form-label" style={{ fontSize: '0.8rem', color: '#d97706' }}>Thuế GTGT (8%)</label>
-                              <input type="text" className="form-input" value={formatInputCurrency(Math.round(Number(formData.electricFee) * 0.08))} readOnly style={{ background: '#fefce8', color: '#d97706', cursor: 'default', fontWeight: 600 }} />
+                        {modalMode === 'create' && (
+                          <div className="meter-source-panel meter-source-panel--inline">
+                            <div className="meter-source-panel__head">
+                              <div>
+                                <strong>Nguồn chỉ số điện</strong>
+                                <span>Chọn dữ liệu điện dùng để chốt kỳ hóa đơn này.</span>
+                              </div>
+                              <em>{electricMeterSource === 'MOCK_API' ? 'Đang dùng mock API' : 'Đang dùng ghi thủ công'}</em>
                             </div>
-                            <div className="form-field" style={{ marginBottom: 0 }}>
-                              <label className="form-label" style={{ fontSize: '0.8rem', color: '#047857' }}>Tổng tiền điện</label>
-                              <input type="text" className="form-input" value={formatInputCurrency(Math.round(Number(formData.electricFee) * 1.08))} readOnly style={{ background: '#d1fae5', color: '#047857', cursor: 'default', fontWeight: 600 }} />
+                            <div className="meter-source-options">
+                              {[
+                                { value: 'MOCK_API', label: 'Mock API', desc: 'Tự lấy chỉ số điện từ EVN mock', icon: Icons.refresh },
+                                { value: 'MANUAL', label: 'Ghi thủ công', desc: 'Dùng chỉ số điện Technician đã ghi', icon: Icons.clipboard },
+                              ].map((option) => (
+                                <button key={option.value} type="button" className={`meter-source-option ${electricMeterSource === option.value ? 'meter-source-option--active' : ''}`} onClick={() => handleElectricMeterSourceSelect(option.value)}>
+                                  <span className="meter-source-option__icon">{option.icon}</span>
+                                  <span><strong>{option.label}</strong><small>{option.desc}</small></span>
+                                  <span className="meter-source-option__radio" />
+                                </button>
+                              ))}
                             </div>
                           </div>
                         )}
+                      {(() => {
+                        const isElectricManualMissing = electricMeterSource === 'MANUAL' && evnMockInfo.error === 'Kĩ thuật viên chưa ghi lại dữ liệu điện';
+                        return (
+                          <>
+                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginBottom: '0.75rem' }}>
+                              <div className="form-field" style={{ marginBottom: 0 }}>
+                                <label className="form-label" style={{ fontSize: '0.8rem' }}>Chỉ số điện đầu kỳ</label>
+                                <input type="text" className="form-input" value={formatInputCurrency(formData.electricPreviousReading)} readOnly style={{ background: '#f1f5f9', cursor: 'default' }} />
+                              </div>
+                              {!isElectricManualMissing && (
+                                <div className="form-field" style={{ marginBottom: 0 }}>
+                                  <label className="form-label" style={{ fontSize: '0.8rem' }}>Chỉ số điện cuối kỳ</label>
+                                  <input type="text" className="form-input" value={formatInputCurrency(formData.electricCurrentReading)} onChange={(e) => handleFormChange('electricCurrentReading', parseInputCurrency(e.target.value))} placeholder="Nhập chỉ số mới..." />
+                                </div>
+                              )}
+                            </div>
+                            
+                            {!isElectricManualMissing && (
+                              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+                                <div className="form-field" style={{ marginBottom: 0 }}>
+                                  <label className="form-label" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>Điện tiêu thụ (kWh) {activeFee && activeFee.electricFee > 0 && <span style={{ color: '#e74c3c', fontSize: '0.8rem', fontWeight: 600 }}>{shortMoney(activeFee.electricFee)}/kWh</span>}</label>
+                                  <input type="text" className="form-input" value={formatInputCurrency(formData.electricQuantity)} onChange={(e) => handleFormChange('electricQuantity', parseInputCurrency(e.target.value))} placeholder="Nhập số điện..." />
+                                </div>
+                                <div className="form-field" style={{ marginBottom: 0 }}>
+                                  <label className="form-label" style={{ color: '#64748b' }}>Tiền điện chưa thuế</label>
+                                  <input type="text" className="form-input" value={formatInputCurrency(formData.electricFee)} readOnly placeholder="Tự động tính" style={{ background: '#f1f5f9', color: '#64748b', cursor: 'default', fontWeight: 600 }} />
+                                </div>
+                              </div>
+                            )}
+
+                            {Number(formData.electricFee) > 0 && !isElectricManualMissing && (
+                              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginTop: '0.75rem', paddingBottom: '0.5rem', alignItems: 'end' }}>
+                                <div className="form-field" style={{ marginBottom: 0 }}>
+                                  <label className="form-label" style={{ fontSize: '0.8rem', color: '#d97706' }}>Thuế GTGT (8%)</label>
+                                  <input type="text" className="form-input" value={formatInputCurrency(Math.round(Number(formData.electricFee) * 0.08))} readOnly style={{ background: '#fefce8', color: '#d97706', cursor: 'default', fontWeight: 600 }} />
+                                </div>
+                                <div className="form-field" style={{ marginBottom: 0 }}>
+                                  <label className="form-label" style={{ fontSize: '0.8rem', color: '#047857' }}>Tổng tiền điện</label>
+                                  <input type="text" className="form-input" value={formatInputCurrency(Math.round(Number(formData.electricFee) * 1.08))} readOnly style={{ background: '#d1fae5', color: '#047857', cursor: 'default', fontWeight: 600 }} />
+                                </div>
+                              </div>
+                            )}
+
+                            {modalMode === 'create' && formData.apartmentId && (
+                              <div style={{ marginTop: '0.5rem', fontSize: '0.75rem', fontWeight: 500 }}>
+                                {evnMockInfo.loading && <span style={{ color: '#d97706' }}>Đang tải chỉ số điện...</span>}
+                                {!evnMockInfo.loading && evnMockInfo.error && <span style={{ color: '#dc2626' }}>{evnMockInfo.error}</span>}
+                                {!evnMockInfo.loading && evnMockInfo.data && <span style={{ color: '#059669' }}>✓ {evnMockInfo.data.sourceLabel || 'Mock API'}: {evnMockInfo.data.kwhConsumed || 0} kWh</span>}
+                              </div>
+                            )}
+                          </>
+                        );
+                      })()}
                       </div>
                     )}
+                  </div>
+                </div>
+                )}
 
-                    {/* WATER SECTION */}
-                    <div style={{ padding: '1.25rem', background: '#f8fafc', borderRadius: 8, border: '1px solid #e2e8f0' }}>
-                      <div style={{ fontWeight: 600, color: '#0369a1', fontSize: '0.9rem', marginBottom: '0.75rem', display: 'flex', alignItems: 'center', gap: 6 }}>
+                {/* 4. Water Consumption */}
+                {isInvoiceStep('water') && (
+                <div className="form-field form-field--full" style={{ padding: 0, background: '#ffffff', borderRadius: '8px', border: '1px solid #cbd5e1', marginBottom: 0, overflow: 'hidden', boxShadow: '0 2px 4px rgba(0,0,0,0.02)' }}>
+                  <div style={{ background: 'linear-gradient(135deg, #e0f2fe, #bae6fd)', padding: '0.85rem 1.25rem', borderBottom: '1px solid #7dd3fc', fontWeight: 600, color: '#0369a1', fontSize: '0.95rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ width: 18, height: 18 }}><path d="M12 2.5S5 10 5 15a7 7 0 0 0 14 0c0-5-7-12.5-7-12.5Z" /></svg>
+                    Dịch vụ Tiền nước
+                  </div>
+                  <div style={{ padding: '1.25rem' }}>
+                    <div style={{ marginBottom: '1rem', padding: '1.25rem', background: '#f8fafc', borderRadius: 8, border: '1px solid #e2e8f0' }}>
+                      <div style={{ fontWeight: 600, color: '#0ea5e9', fontSize: '0.9rem', marginBottom: '0.75rem', display: 'flex', alignItems: 'center', gap: 6 }}>
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ width: 16, height: 16 }}><path d="M12 2.69l5.66 5.66a8 8 0 1 1-11.31 0z" /></svg>
                         Tiền nước
                       </div>
-                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
-                        <div className="form-field" style={{ marginBottom: 0 }}>
-                          <label className="form-label" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>Nước tiêu thụ (m³) {activeFee && activeFee.waterFee > 0 && <span style={{ color: '#e74c3c', fontSize: '0.8rem', fontWeight: 600 }}>{shortMoney(activeFee.waterFee)}/m³</span>}</label>
-                          <input type="text" className="form-input" value={formatInputCurrency(formData.waterQuantity)} onChange={(e) => handleFormChange('waterQuantity', parseInputCurrency(e.target.value))} placeholder="Nhập số khối nước..." readOnly={!!(!waterMockInfo.loading && waterMockInfo.data)} style={{ background: (!waterMockInfo.loading && waterMockInfo.data) ? '#f1f5f9' : '#fff' }} />
-                          {modalMode === 'create' && formData.apartmentId && (
-                            <div style={{ marginTop: '0.4rem', fontSize: '0.75rem', fontWeight: 500 }}>
-                              {waterMockInfo.loading && <span style={{ color: '#d97706' }}>Đang kết nối Công ty nước...</span>}
-                              {!waterMockInfo.loading && waterMockInfo.error && <span style={{ color: '#dc2626' }}>{waterMockInfo.error}</span>}
-                              {!waterMockInfo.loading && waterMockInfo.data && <span style={{ color: '#059669' }}>✓ Nước: {waterMockInfo.data.cubicMeterConsumed} m³ (Kỳ: {waterMockInfo.data.billingPeriod || 'N/A'})</span>}
+                      {modalMode === 'create' && (
+                        <div className="meter-source-panel meter-source-panel--inline">
+                          <div className="meter-source-panel__head">
+                            <div>
+                              <strong>Nguồn chỉ số nước</strong>
+                              <span>Chọn dữ liệu nước dùng để chốt kỳ hóa đơn này.</span>
                             </div>
-                          )}
+                            <em>{waterMeterSource === 'MOCK_API' ? 'Đang dùng mock API' : 'Đang dùng ghi thủ công'}</em>
+                          </div>
+                          <div className="meter-source-options">
+                            {[
+                              { value: 'MOCK_API', label: 'Mock API', desc: 'Tự lấy chỉ số nước từ Công ty nước mock', icon: Icons.refresh },
+                              { value: 'MANUAL', label: 'Ghi thủ công', desc: 'Dùng chỉ số nước Technician đã ghi', icon: Icons.clipboard },
+                            ].map((option) => (
+                              <button key={option.value} type="button" className={`meter-source-option ${waterMeterSource === option.value ? 'meter-source-option--active' : ''}`} onClick={() => handleWaterMeterSourceSelect(option.value)}>
+                                <span className="meter-source-option__icon">{option.icon}</span>
+                                <span><strong>{option.label}</strong><small>{option.desc}</small></span>
+                                <span className="meter-source-option__radio" />
+                              </button>
+                            ))}
+                          </div>
                         </div>
-                        <div className="form-field" style={{ marginBottom: 0 }}>
-                          <label className="form-label" style={{ color: '#047857' }}>Tổng tiền nước</label>
-                          <input type="text" className="form-input" value={formatInputCurrency(formData.waterFee)} readOnly placeholder="Tự động tính" style={{ background: '#d1fae5', color: '#047857', cursor: 'default', fontWeight: 600 }} />
-                        </div>
-                      </div>
+                      )}
+                      {(() => {
+                        const isWaterManualMissing = waterMeterSource === 'MANUAL' && waterMockInfo.error === 'Kĩ thuật viên chưa ghi lại dữ liệu nước';
+                        return (
+                          <>
+                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginBottom: '0.75rem' }}>
+                              <div className="form-field" style={{ marginBottom: 0 }}>
+                                <label className="form-label" style={{ fontSize: '0.8rem' }}>Chỉ số nước đầu kỳ</label>
+                                <input type="text" className="form-input" value={formatInputCurrency(formData.waterPreviousReading)} readOnly style={{ background: '#f1f5f9', cursor: 'default' }} />
+                              </div>
+                              {!isWaterManualMissing && (
+                                <div className="form-field" style={{ marginBottom: 0 }}>
+                                  <label className="form-label" style={{ fontSize: '0.8rem' }}>Chỉ số nước cuối kỳ</label>
+                                  <input type="text" className="form-input" value={formatInputCurrency(formData.waterCurrentReading)} onChange={(e) => handleFormChange('waterCurrentReading', parseInputCurrency(e.target.value))} placeholder="Nhập chỉ số mới..." />
+                                </div>
+                              )}
+                            </div>
+
+                            {!isWaterManualMissing && (
+                              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+                                <div className="form-field" style={{ marginBottom: 0 }}>
+                                  <label className="form-label" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>Nước tiêu thụ (m³) {activeFee && activeFee.waterFee > 0 && <span style={{ color: '#e74c3c', fontSize: '0.8rem', fontWeight: 600 }}>{shortMoney(activeFee.waterFee)}/m³</span>}</label>
+                                  <input type="text" className="form-input" value={formatInputCurrency(formData.waterQuantity)} onChange={(e) => handleFormChange('waterQuantity', parseInputCurrency(e.target.value))} placeholder="Nhập số khối nước..." />
+                                </div>
+                                <div className="form-field" style={{ marginBottom: 0 }}>
+                                  <label className="form-label" style={{ color: '#64748b' }}>Tiền nước chưa thuế/phí</label>
+                                  <input type="text" className="form-input" value={formatInputCurrency(formData.waterFee)} readOnly placeholder="Tự động tính" style={{ background: '#f1f5f9', color: '#64748b', cursor: 'default', fontWeight: 600 }} />
+                                </div>
+                              </div>
+                            )}
+
+                            {Number(formData.waterFee) > 0 && !isWaterManualMissing && (
+                              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginTop: '0.75rem', paddingBottom: '0.5rem', alignItems: 'end' }}>
+                                <div className="form-field" style={{ marginBottom: 0 }}>
+                                  <label className="form-label" style={{ fontSize: '0.8rem', color: '#d97706' }}>Thuế GTGT + phí BVMT (15%)</label>
+                                  <input type="text" className="form-input" value={formatInputCurrency(Math.round(Number(formData.waterFee) * 0.15))} readOnly style={{ background: '#fefce8', color: '#d97706', cursor: 'default', fontWeight: 600 }} />
+                                </div>
+                                <div className="form-field" style={{ marginBottom: 0 }}>
+                                  <label className="form-label" style={{ fontSize: '0.8rem', color: '#047857' }}>Tổng tiền nước</label>
+                                  <input type="text" className="form-input" value={formatInputCurrency(Math.round(Number(formData.waterFee) * 1.15))} readOnly style={{ background: '#d1fae5', color: '#047857', cursor: 'default', fontWeight: 600 }} />
+                                </div>
+                              </div>
+                            )}
+
+                            {modalMode === 'create' && formData.apartmentId && (
+                              <div style={{ marginTop: '0.5rem', fontSize: '0.75rem', fontWeight: 500 }}>
+                                {waterMockInfo.loading && <span style={{ color: '#d97706' }}>Đang tải chỉ số nước...</span>}
+                                {!waterMockInfo.loading && waterMockInfo.error && <span style={{ color: '#dc2626' }}>{waterMockInfo.error}</span>}
+                                {!waterMockInfo.loading && waterMockInfo.data && <span style={{ color: '#059669' }}>✓ {waterMockInfo.data.sourceLabel || 'Mock API'}: {waterMockInfo.data.cubicMeterConsumed || 0} m³</span>}
+                              </div>
+                            )}
+                          </>
+                        );
+                      })()}
                     </div>
                   </div>
                 </div>
+                )}
 
                 {/* 4. Other Fees */}
-                <div className="form-field form-field--full" style={{ padding: 0, background: '#ffffff', borderRadius: '8px', border: '1px solid #cbd5e1', marginBottom: 0, overflow: 'hidden', boxShadow: '0 2px 4px rgba(0,0,0,0.02)' }}>
-                  <div style={{ background: 'linear-gradient(135deg, #fefce8, #fef9c3)', padding: '0.85rem 1.25rem', borderBottom: '1px solid #fde68a', fontWeight: 600, color: '#92400e', fontSize: '0.95rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                {isInvoiceStep('fees') && (
+                <div className="form-field form-field--full" style={{ padding: 0, background: '#ffffff', borderRadius: '8px', border: '1px solid #cbd5e1', marginBottom: 0, boxShadow: '0 2px 4px rgba(0,0,0,0.02)' }}>
+                  <div style={{ background: 'linear-gradient(135deg, #fefce8, #fef9c3)', padding: '0.85rem 1.25rem', borderBottom: '1px solid #fde68a', fontWeight: 600, color: '#92400e', fontSize: '0.95rem', display: 'flex', alignItems: 'center', gap: '0.5rem', borderRadius: '8px 8px 0 0' }}>
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ width: 18, height: 18 }}><line x1="12" y1="1" x2="12" y2="23" /><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" /></svg>
                     Các loại phí khác
                   </div>
                   <div style={{ padding: '1.25rem', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-                    {/* Row 1: Phí quản lý + Phí phát sinh (equal height) */}
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '1rem' }}>
                       <div className="form-field" style={{ marginBottom: 0 }}>
                         <label className="form-label">Phí quản lý (VNĐ)</label>
                         <input type="text" className="form-input" value={formatInputCurrency(formData.managementFee)}
                           onChange={(e) => handleFormChange('managementFee', parseInputCurrency(e.target.value))}
                           placeholder={activeFee ? 'Từ phí dịch vụ' : '0'} />
                       </div>
-                      <div className="form-field" style={{ marginBottom: 0 }}>
-                        <label className="form-label">Phí phát sinh (VNĐ)</label>
-                        <input type="text" className="form-input" value={formatInputCurrency(formData.otherFee)}
-                          onChange={(e) => handleFormChange('otherFee', parseInputCurrency(e.target.value))}
-                          placeholder={activeFee ? 'Từ bảng phí dịch vụ' : '0'} />
-                      </div>
                     </div>
 
-                    {/* Row 2: Mô tả phí phát sinh (full width) */}
-                    <div className="form-field" style={{ marginBottom: 0 }}>
-                      <label className="form-label">Mô tả (Phí phát sinh)</label>
-                      <textarea className="form-input" value={formData.descriptionOtherFee || ''}
-                        onChange={(e) => handleFormChange('descriptionOtherFee', e.target.value)}
-                        placeholder="VD: Phí sửa vòi nước..." rows="2" style={{ resize: 'vertical' }} />
+                    <div className="invoice-extra-fees">
+                      <div className="invoice-extra-fees__head">
+                        <div>
+                          <strong>Phí phát sinh</strong>
+                          <span>Thêm từng khoản phí kèm mô tả và số tiền.</span>
+                        </div>
+                        <div className="invoice-extra-fees__actions">
+                          <b>{formatInputCurrency(invoiceOtherFeeSummary.total)}đ</b>
+                          <button type="button" className="invoice-extra-fees__add" onClick={handleAddOtherFeeItem}>
+                            {Icons.plus}
+                            <span>Thêm phí</span>
+                          </button>
+                        </div>
+                      </div>
+                      <div className="invoice-extra-fees__list">
+                        {invoiceOtherFeeItems.map((item, index) => {
+                          const isOnlyBlankRow = invoiceOtherFeeItems.length === 1 && !item.description && !item.amount;
+                          return (
+                            <div className="invoice-extra-fees__row" key={item.id}>
+                              <div className="form-field invoice-extra-fees__desc" style={{ marginBottom: 0 }}>
+                                <label className="form-label">Mô tả khoản phí {index + 1}</label>
+                                <input
+                                  type="text"
+                                  className="form-input"
+                                  value={item.description || ''}
+                                  onChange={(e) => handleOtherFeeItemChange(item.id, 'description', e.target.value)}
+                                  placeholder="VD: Phí sửa vòi nước..."
+                                />
+                              </div>
+                              <div className="form-field invoice-extra-fees__amount" style={{ marginBottom: 0 }}>
+                                <label className="form-label">Số tiền (VNĐ)</label>
+                                <input
+                                  type="text"
+                                  className="form-input"
+                                  value={formatInputCurrency(item.amount)}
+                                  onChange={(e) => handleOtherFeeItemChange(item.id, 'amount', e.target.value)}
+                                  placeholder="0"
+                                />
+                              </div>
+                              <button
+                                type="button"
+                                className="invoice-extra-fees__remove"
+                                disabled={isOnlyBlankRow}
+                                onClick={() => handleRemoveOtherFeeItem(item.id)}
+                                title="Xóa khoản phí"
+                              >
+                                {Icons.trash}
+                              </button>
+                            </div>
+                          );
+                        })}
+                      </div>
                     </div>
 
                     {/* Row 3: Phí gửi xe */}
@@ -1734,37 +3602,124 @@ export default function InvoicesPage() {
                     </div>
                   </div>
                 </div>
+                )}
+
+                {isInvoiceStep('review') && (
+                  <div className="form-field form-field--full invoice-review">
+                    <div className="invoice-review__head">
+                      <div>
+                        <strong>Xác nhận hóa đơn</strong>
+                        <span>Kiểm tra nhanh các khoản chính trước khi lưu.</span>
+                      </div>
+                      <div className="invoice-review__total">{money(invoiceTotalPreview.total)}</div>
+                    </div>
+                    <div className="invoice-review__body">
+                      <div className="invoice-review__summary">
+                        <div className="invoice-review__summary-card invoice-review__summary-card--home">
+                          <span>Căn hộ</span>
+                          <strong>{getApartmentLabel(apartments.find((apt) => String(apt.id) === String(formData.apartmentId)) || selectedInvoice?.apartment) || 'Chưa chọn'}</strong>
+                        </div>
+                        <div className="invoice-review__summary-card invoice-review__summary-card--date">
+                          <span>Kỳ / hạn thanh toán</span>
+                          <strong>{formatBillingPeriodDisplay(billingPeriodFromDate(formData.dueDate))} · {formatDate(formData.dueDate)}</strong>
+                        </div>
+                        <div className="invoice-review__summary-card invoice-review__summary-card--source">
+                          <span>Nguồn chỉ số</span>
+                          <strong>Điện: {electricMeterSource === 'MOCK_API' ? 'Mock API' : 'Ghi thủ công'} · Nước: {waterMeterSource === 'MOCK_API' ? 'Mock API' : 'Ghi thủ công'}</strong>
+                        </div>
+                      </div>
+
+                      <div className="invoice-review__columns">
+                        <section className="invoice-review__section invoice-review__section--usage">
+                          <div className="invoice-review__section-head">
+                            <span>Tiêu thụ điện nước</span>
+                            <strong>{money(invoiceTotalPreview.electricAfterTax + invoiceTotalPreview.waterAfterTax)}</strong>
+                          </div>
+                          <div className="invoice-review__line invoice-review__line--electric">
+                            <div>
+                              <span>Điện</span>
+                              <strong>{formatInputCurrency(formData.electricQuantity || 0)} kWh</strong>
+                              <small>Chỉ số {formatInputCurrency(formData.electricPreviousReading || 0)} → {formatInputCurrency(formData.electricCurrentReading || 0)} kWh</small>
+                              <small>{activeFee?.useTieredElectric ? 'Biểu giá lũy tiến, VAT 8%' : `Đơn giá ${shortMoney(activeFee?.electricFee || 0)}/kWh, VAT 8%`}</small>
+                            </div>
+                            <b>{money(invoiceTotalPreview.electricAfterTax)}</b>
+                          </div>
+                          <div className="invoice-review__line invoice-review__line--water">
+                            <div>
+                              <span>Nước</span>
+                              <strong>{formatInputCurrency(formData.waterQuantity || 0)} m3</strong>
+                              <small>Chỉ số {formatInputCurrency(formData.waterPreviousReading || 0)} → {formatInputCurrency(formData.waterCurrentReading || 0)} m3</small>
+                              <small>Đơn giá {shortMoney(activeFee?.waterFee || 0)}/m3, thuế/phí 15%</small>
+                            </div>
+                            <b>{money(invoiceTotalPreview.waterAfterTax)}</b>
+                          </div>
+                        </section>
+
+                        <section className="invoice-review__section invoice-review__section--fees">
+                          <div className="invoice-review__section-head">
+                            <span>Phí dịch vụ</span>
+                            <strong>{money((Number(formData.managementFee) || 0) + (Number(formData.parkingFee) || 0) + invoiceOtherFeeSummary.total)}</strong>
+                          </div>
+                          <div className="invoice-review__fee-list">
+                            <div className="invoice-review__fee-row invoice-review__fee-row--management">
+                              <span>Phí quản lý</span>
+                              <strong>{money(Number(formData.managementFee) || 0)}</strong>
+                              <small>Phí dịch vụ cố định từ bảng phí.</small>
+                            </div>
+                            <div className="invoice-review__fee-row invoice-review__fee-row--parking">
+                              <span>Phí gửi xe</span>
+                              <strong>{money(Number(formData.parkingFee) || 0)}</strong>
+                              <small>
+                                {parkingFeeInfo.vehicles?.counts
+                                  ? `Xe máy ${parkingFeeInfo.vehicles.counts.MOTORBIKE || 0}, ô tô ${parkingFeeInfo.vehicles.counts.CAR || 0}, xe đạp ${parkingFeeInfo.vehicles.counts.BICYCLE || 0}, xe điện ${parkingFeeInfo.vehicles.counts.ELECTRIC_BIKE || 0}.`
+                                  : 'Theo danh sách xe đã đăng ký của căn hộ.'}
+                              </small>
+                            </div>
+                            <div className="invoice-review__fee-row invoice-review__fee-row--other">
+                              <span>Phí phát sinh</span>
+                              <strong>{money(invoiceOtherFeeSummary.total)}</strong>
+                              <small>
+                                {invoiceOtherFeeSummary.items.length
+                                  ? invoiceOtherFeeSummary.items.map((item) => `${item.description || 'Phí phát sinh'} (${formatInputCurrency(item.amount)}đ)`).join(' · ')
+                                  : 'Không có mô tả phí phát sinh.'}
+                              </small>
+                            </div>
+                          </div>
+                        </section>
+                      </div>
+
+                      <div className="invoice-review__note">
+                        <span>Nguồn chỉ số quyết định chỉ số đầu kỳ, cuối kỳ và sản lượng tiêu thụ dùng để tính tiền điện nước. Hóa đơn có hạn thanh toán {formatDate(formData.dueDate)}.</span>
+                        <strong>{money(invoiceTotalPreview.total)}</strong>
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
 
-              {/* Live total preview */}
-              {(() => {
-                const electricAfterTax = Math.round((Number(formData.electricFee) || 0) * 1.08);
-                const total = electricAfterTax + (Number(formData.waterFee) || 0) + (Number(formData.managementFee) || 0) + (Number(formData.parkingFee) || 0) + (Number(formData.otherFee) || 0);
-                return (
-                  <div style={{ padding: '0.75rem 1.5rem', background: 'linear-gradient(135deg, #fef2f2, #fee2e2)', borderTop: '2px solid #fca5a5', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <span style={{ fontSize: '0.9rem', fontWeight: 600, color: '#991b1b' }}>Tổng tạm tính</span>
-                    <span style={{ fontSize: '1.25rem', fontWeight: 800, color: '#dc2626', letterSpacing: '-0.02em' }}>{money(total)}</span>
-                  </div>
-                );
-              })()}
-              <div className="modal__footer">
+              <div className="modal__footer invoice-wizard__footer">
                 <button type="button" className="btn btn--ghost" onClick={() => setModalOpen(false)}>Hủy</button>
-                <button type="submit" className="btn btn--primary" disabled={submitting}>
-                  {submitting ? 'Đang xử lý...' : modalMode === 'create' ? 'Tạo hóa đơn' : 'Cập nhật'}
-                </button>
+                <button type="button" className="btn btn--secondary" disabled={isInvoiceFirstStep} onClick={() => goToInvoiceStep(invoiceStep - 1)}>Quay lại</button>
+                {!isInvoiceLastStep ? (
+                  <button type="button" className="btn btn--primary" onClick={handleInvoiceNextStep}>Tiếp tục</button>
+                ) : (
+                  <button type="submit" className="btn btn--primary" disabled={submitting}>
+                    {submitting ? 'Đang xử lý...' : modalMode === 'create' ? 'Tạo hóa đơn' : 'Cập nhật'}
+                  </button>
+                )}
               </div>
             </form>
           </div>
         </div>
-      )}
+      ), document.body)}
 
             {/* ═══════════ VIEW MODAL ═══════════ */}
-      {modalOpen && modalMode === 'view' && selectedInvoice && (
-        <div className="modal-overlay" onClick={() => setModalOpen(false)}>
-          <div className="modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '960px', width: '96%', maxHeight: '92vh', background: '#f8fafc', padding: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+      {modalOpen && modalMode === 'view' && selectedInvoice && createPortal((
+        <div className="modal-overlay invoice-view-overlay" onClick={() => setModalOpen(false)}>
+          <div className="modal invoice-view-modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '960px', width: '96%', maxHeight: '92vh', background: '#f8fafc', padding: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
             
             {/* Modal Header */}
-            <div style={{ background: 'linear-gradient(135deg, #1e293b, #0f172a)', padding: '1rem 1.5rem', color: '#fff', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', position: 'relative', flexShrink: 0 }}>
+            <div style={{ background: 'linear-gradient(135deg, #1e293b, #0f172a)', padding: '1rem 3.75rem 1rem 1.5rem', color: '#fff', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', position: 'relative', flexShrink: 0, gap: '1rem' }}>
               <div>
                 <div style={{ fontSize: '0.72rem', color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.8px', marginBottom: '0.25rem', fontWeight: 600 }}>Hóa đơn dịch vụ</div>
                 <h3 style={{ margin: 0, fontSize: '1.35rem', fontWeight: 700 }}>{selectedInvoice.invoiceNumber || '—'}</h3>
@@ -1870,6 +3825,34 @@ export default function InvoicesPage() {
                 })()}
               </div>
 
+              {(selectedInvoice.electricQuantity != null || selectedInvoice.waterQuantity != null) && (
+                <div style={{ border: '1px solid #cbd5e1', borderRadius: '10px', overflow: 'hidden', marginBottom: '1.25rem', background: '#f8fafc' }}>
+                  <div style={{ padding: '0.75rem 1rem', borderBottom: '1px solid #e2e8f0', fontSize: '0.82rem', fontWeight: 700, color: '#1e293b' }}>
+                    Chỉ số điện nước
+                  </div>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem', padding: '0.85rem' }}>
+                    {selectedInvoice.electricQuantity != null && (
+                      <div style={{ background: '#fff', border: '1px solid #e2e8f0', borderRadius: 8, padding: '0.75rem' }}>
+                        <div style={{ fontSize: '0.75rem', fontWeight: 700, color: '#1d4ed8', marginBottom: 4 }}>Điện</div>
+                        <div style={{ fontSize: '0.8rem', color: '#334155' }}>
+                          {formatInputCurrency(selectedInvoice.electricPreviousReading || 0)} {' -> '} {formatInputCurrency(selectedInvoice.electricCurrentReading || 0)} kWh
+                        </div>
+                        <div style={{ fontSize: '0.74rem', color: '#64748b' }}>Tiêu thụ {formatInputCurrency(selectedInvoice.electricQuantity || 0)} kWh</div>
+                      </div>
+                    )}
+                    {selectedInvoice.waterQuantity != null && (
+                      <div style={{ background: '#fff', border: '1px solid #e2e8f0', borderRadius: 8, padding: '0.75rem' }}>
+                        <div style={{ fontSize: '0.75rem', fontWeight: 700, color: '#0369a1', marginBottom: 4 }}>Nước</div>
+                        <div style={{ fontSize: '0.8rem', color: '#334155' }}>
+                          {formatInputCurrency(selectedInvoice.waterPreviousReading || 0)} {' -> '} {formatInputCurrency(selectedInvoice.waterCurrentReading || 0)} m3
+                        </div>
+                        <div style={{ fontSize: '0.74rem', color: '#64748b' }}>Tiêu thụ {formatInputCurrency(selectedInvoice.waterQuantity || 0)} m3</div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
               {/* Fee breakdown */}
               <div style={{ border: '1px solid #e2e8f0', borderRadius: '10px', overflow: 'hidden', marginBottom: '1.25rem' }}>
                 <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
@@ -1941,8 +3924,8 @@ export default function InvoicesPage() {
                       return (
                         <div key={p.paymentId} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0.75rem', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '8px', flexWrap: 'wrap', gap: '0.75rem' }}>
                           <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
-                            <div style={{ width: '32px', height: '32px', borderRadius: '50%', background: p.paymentMethod === 'MOMO' ? '#fce4ec' : '#dcfce7', color: p.paymentMethod === 'MOMO' ? '#ae2070' : '#16a34a', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1rem', flexShrink: 0 }}>
-                              {p.paymentMethod === 'MOMO' ? '📱' : '💵'}
+                            <div style={{ width: '32px', height: '32px', borderRadius: '50%', background: p.paymentMethod === 'MOMO' ? '#fce4ec' : p.paymentMethod === 'VNPAY' ? '#dbeafe' : '#dcfce7', color: p.paymentMethod === 'MOMO' ? '#ae2070' : p.paymentMethod === 'VNPAY' ? '#2563eb' : '#16a34a', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1rem', flexShrink: 0 }}>
+                              {p.paymentMethod === 'MOMO' ? '📱' : p.paymentMethod === 'VNPAY' ? '🏦' : '💵'}
                             </div>
                             <div>
                               <div style={{ fontWeight: 600, color: '#1e293b', fontSize: '0.82rem', marginBottom: '0.12rem' }}>{money(p.amount)} <span style={{ fontSize: '0.68rem', color: '#94a3b8', fontWeight: 400, marginLeft: '0.2rem' }}>qua {p.paymentMethod}</span></div>
@@ -1992,7 +3975,7 @@ export default function InvoicesPage() {
             </div>
           </div>
         </div>
-      )}
+      ), document.body)}
 
 {/* ═══════════ PAYMENT METHOD MODAL ═══════════ */}
       {payModalOpen && (
@@ -2010,6 +3993,7 @@ export default function InvoicesPage() {
                 {[
                   { value: 'CASH', label: 'Tiền mặt', icon: '💵', color: '#16a34a', bg: '#dcfce7' },
                   { value: 'MOMO', label: 'MoMo', icon: '📱', color: '#ae2070', bg: '#fce4ec' },
+                  { value: 'VNPAY', label: 'VNPay', icon: '🏦', color: '#2563eb', bg: '#dbeafe' },
                 ].map((m) => (
                   <button key={m.value} type="button"
                     onClick={() => setPayMethod(m.value)}
@@ -2035,6 +4019,12 @@ export default function InvoicesPage() {
                 </div>
               )}
 
+              {payMethod === 'VNPAY' && (
+                <div style={{ padding: '0.75rem 1rem', background: '#dbeafe', borderRadius: 8, fontSize: '0.85rem', color: '#1d4ed8' }}>
+                  Bạn sẽ được chuyển sang cổng VNPay để thanh toán trực tuyến.
+                </div>
+              )}
+
               {/* Cash form */}
               {payMethod === 'CASH' && (
                 <div className="form-field">
@@ -2048,8 +4038,8 @@ export default function InvoicesPage() {
               <button className="btn btn--ghost" onClick={() => setPayModalOpen(false)}>Hủy</button>
               <button className="btn btn--primary" onClick={handleManualPayment}
                 disabled={!payMethod || paySubmitting}
-                style={payMethod === 'MOMO' ? { background: 'linear-gradient(135deg, #ae2070, #880e4f)' } : {}}>
-                {paySubmitting ? 'Đang xử lý...' : payMethod === 'MOMO' ? '📱 Thanh toán MoMo' : payMethod === 'CASH' ? '💵 Xác nhận tiền mặt' : 'Chọn phương thức'}
+                style={payMethod === 'MOMO' ? { background: 'linear-gradient(135deg, #ae2070, #880e4f)' } : payMethod === 'VNPAY' ? { background: 'linear-gradient(135deg, #2563eb, #1d4ed8)' } : {}}>
+                {paySubmitting ? 'Đang xử lý...' : payMethod === 'MOMO' ? '📱 Thanh toán MoMo' : payMethod === 'VNPAY' ? '🏦 Thanh toán VNPay' : payMethod === 'CASH' ? '💵 Xác nhận tiền mặt' : 'Chọn phương thức'}
               </button>
             </div>
           </div>
@@ -2057,7 +4047,7 @@ export default function InvoicesPage() {
       )}
 
       {/* ═══════════ DELETE MODAL ═══════════ */}
-      {deleteModalOpen && deleteTarget && (
+      {deleteModalOpen && deleteTarget && createPortal((
         <div className="modal-overlay" onClick={() => setDeleteModalOpen(false)}>
           <div className="modal modal--sm" onClick={(e) => e.stopPropagation()}>
             <div className="modal__header modal__header--danger">
@@ -2085,10 +4075,10 @@ export default function InvoicesPage() {
             </div>
           </div>
         </div>
-      )}
+      ), document.body)}
 
       {/* ═══════════ TABLE FEE DELETE MODAL ═══════════ */}
-      {feeDeleteModalOpen && feeDeleteTargetIdx !== null && (
+      {feeDeleteModalOpen && feeDeleteTargetIdx !== null && createPortal((
         <div className="modal-overlay" onClick={() => setFeeDeleteModalOpen(false)} style={{ zIndex: 1100 }}>
           <div className="modal modal--sm" onClick={(e) => e.stopPropagation()}>
             <div className="modal__header modal__header--danger">
@@ -2116,7 +4106,7 @@ export default function InvoicesPage() {
             </div>
           </div>
         </div>
-      )}
+      ), document.body)}
 
       {/* ═══════════ TABLE FEE EDIT MODAL ═══════════ */}
       {tableFeeEditOpen && (
@@ -2366,120 +4356,306 @@ export default function InvoicesPage() {
       )}
 
       {/* ═══ Batch Invoice Modal ═══ */}
-      {batchModalOpen && (
-        <div className="modal-overlay" onClick={() => setBatchModalOpen(false)}>
-          <div className="modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '700px' }}>
+      {batchModalOpen && createPortal((
+        <div className="modal-overlay invoice-batch-overlay" onClick={() => setBatchModalOpen(false)}>
+          <div className="modal invoice-batch-modal" onClick={(e) => e.stopPropagation()}>
             <div className="modal__header">
-              <h3 className="modal__title">Tạo hóa đơn hàng loạt</h3>
+              <div>
+                <h3 className="modal__title">Tạo hóa đơn hàng loạt</h3>
+                <p className="invoice-batch-modal__desc">Thiết lập kỳ thanh toán, bảng phí và chọn các căn hộ cần phát hành hóa đơn.</p>
+              </div>
               <button className="modal__close" onClick={() => setBatchModalOpen(false)}>{Icons.close}</button>
             </div>
-            <div className="modal__body">
-              <div className="form-grid">
-                {/* Bảng phí */}
-                <div className="form-field form-field--full">
-                  <label className="form-label">Bảng phí áp dụng <span className="form-required">*</span></label>
-                  <select className="form-select" value={batchFeeIndex} onChange={(e) => setBatchFeeIndex(Number(e.target.value))}>
-                    {tableFees.map((f, i) => (
-                      <option key={f.id} value={i}>{f.title || `Bảng phí #${f.id}`}</option>
-                    ))}
-                  </select>
-                </div>
-                {/* Hạn thanh toán + Đã chọn */}
-                <div className="form-field">
-                  <label className="form-label">Hạn thanh toán <span className="form-required">*</span></label>
-                  <input type="text" className="form-input" value={batchDueDate}
-                    onChange={(e) => {
-                      let v = e.target.value.replace(/[^0-9/]/g, '');
-                      if (v.length === 2 && !v.includes('/')) v += '/';
-                      if (v.length === 5 && v.split('/').length === 2) v += '/';
-                      if (v.length <= 10) setBatchDueDate(v);
-                    }}
-                    placeholder="dd/MM/yyyy" maxLength={10} />
-                </div>
-                <div className="form-field">
-                  <label className="form-label">Đã chọn</label>
-                  <input type="text" className="form-input" value={`${batchSelectedApts.length} / ${apartments.filter(a => a.ownerId || a.residents?.some(r => r.relationshipType === 'TENANT')).length} căn hộ`} readOnly
-                    style={{ fontWeight: 600, cursor: 'default', background: 'var(--bg-card, #f8fafc)' }} />
-                </div>
-              </div>
-              {/* Chọn căn hộ */}
-              <div style={{ marginTop: '1rem' }}>
-                <label className="form-label">Chọn căn hộ</label>
-                <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
-                  <select className="form-select" value={batchFilterBlock} onChange={(e) => { setBatchFilterBlock(e.target.value); setBatchFilterFloor(''); }}
-                    style={{ width: 'auto', minWidth: '120px' }}>
-                    <option value="">Tất cả tòa</option>
-                    {[...new Set(apartments.map(a => a.block).filter(Boolean))].sort().map(b => (
-                      <option key={b} value={b}>Block {b}</option>
-                    ))}
-                  </select>
-                  <select className="form-select" value={batchFilterFloor} onChange={(e) => setBatchFilterFloor(e.target.value)}
-                    style={{ width: 'auto', minWidth: '120px' }}>
-                    <option value="">Tất cả tầng</option>
-                    {[...new Set(apartments
-                      .filter(a => !batchFilterBlock || a.block === batchFilterBlock)
-                      .map(a => a.floor).filter(f => f != null)
-                    )].sort((a, b) => a - b).map(f => (
-                      <option key={f} value={f}>Tầng {f}</option>
-                    ))}
-                  </select>
-                  <button type="button" className="btn btn--ghost btn--sm" onClick={() => {
-                    const filtered = apartments.filter(a => (!batchFilterBlock || a.block === batchFilterBlock) && (!batchFilterFloor || String(a.floor) === String(batchFilterFloor)) && (a.ownerId || a.residents?.some(r => r.relationshipType === 'TENANT')));
-                    setBatchSelectedApts(prev => [...new Set([...prev, ...filtered.map(a => a.id)])]);
-                  }}>Chọn tất cả</button>
-                  <button type="button" className="btn btn--ghost btn--sm" onClick={() => {
-                    const filtered = apartments.filter(a => (!batchFilterBlock || a.block === batchFilterBlock) && (!batchFilterFloor || String(a.floor) === String(batchFilterFloor)) && (a.ownerId || a.residents?.some(r => r.relationshipType === 'TENANT')));
-                    const filteredIds = new Set(filtered.map(a => a.id));
-                    setBatchSelectedApts(prev => prev.filter(id => !filteredIds.has(id)));
-                  }}>Bỏ chọn</button>
-                </div>
-                <div style={{ maxHeight: '280px', overflowY: 'auto', border: '1px solid var(--border, #e2e8f0)', borderRadius: '0.5rem' }}>
-                  {apartments
-                    .filter(apt => (!batchFilterBlock || apt.block === batchFilterBlock) && (!batchFilterFloor || String(apt.floor) === String(batchFilterFloor)))
-                    .filter(apt => apt.ownerId || apt.residents?.some(r => r.relationshipType === 'TENANT'))
-                    .map((apt) => {
-                      const checked = batchSelectedApts.includes(apt.id);
-                      const owner = apt.ownerId && apt.residents?.find(r => r.residentId === apt.ownerId);
-                      const tenant = apt.residents?.find(r => r.relationshipType === 'TENANT');
-                      const badgeStyle = (isOwner) => ({
-                        fontSize: '0.6rem', padding: '0px 4px', borderRadius: '3px', fontWeight: 700, whiteSpace: 'nowrap',
-                        background: isOwner ? '#dcfce7' : '#dbeafe',
-                        color: isOwner ? '#166534' : '#1e40af',
-                        marginLeft: '3px', verticalAlign: 'middle',
-                      });
-                      return (
-                        <label key={apt.id} style={{
-                          display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0.75rem',
-                          cursor: 'pointer', borderBottom: '1px solid #f1f5f9',
-                          background: checked ? '#eef2ff' : 'transparent',
-                          transition: 'background 0.15s',
+            <div className="modal__body invoice-batch-modal__body">
+              <div className="invoice-batch-layout">
+                <section className="invoice-batch-panel invoice-batch-panel--config">
+                  <div className="invoice-batch-section-head">
+                    <div>
+                      <span>Cấu hình</span>
+                      <strong>Kỳ thanh toán & bảng phí</strong>
+                    </div>
+                  </div>
+
+                  <div className="invoice-batch-top-grid">
+                    <div className="form-field">
+                      <label className="form-label">Hạn thanh toán <span className="form-required">*</span></label>
+                      <input type="text" className="form-input" value={batchDueDate}
+                        onChange={(e) => {
+                          let v = e.target.value.replace(/[^0-9/]/g, '');
+                          if (v.length === 2 && !v.includes('/')) v += '/';
+                          if (v.length === 5 && v.split('/').length === 2) v += '/';
+                          if (v.length <= 10) setBatchDueDate(v);
+                        }}
+                        placeholder="dd/MM/yyyy" maxLength={10} />
+                    </div>
+                    <div className="form-field">
+                      <label className="form-label">Đã chọn</label>
+                      <div className="invoice-batch-count">
+                        <strong>{batchSelectedApts.length}</strong>
+                        <span>/ {eligibleBatchApartments.length} căn hộ</span>
+                        {batchSelectedExistingCount > 0 && (
+                          <small className="invoice-batch-skip-note" title={`${batchSelectedExistingCount} căn đã có hóa đơn sẽ được bỏ qua`}>
+                            {batchSelectedExistingCount} bỏ qua
+                          </small>
+                        )}
+                      </div>
+                    </div>
+                    <div className="form-field invoice-batch-field--full">
+                      <label className="form-label">Bảng phí áp dụng <span className="form-required">*</span></label>
+                      <DropdownSelect
+                        value={batchFeeIndex}
+                        onChange={(value) => setBatchFeeIndex(Number(value))}
+                        options={tableFees.map((fee, index) => ({
+                          value: index,
+                          label: fee.title || `Bảng phí #${fee.id}`,
+                        }))}
+                      />
+                    </div>
+                  </div>
+
+                  <div className="invoice-batch-fee-card">
+                    <div className="invoice-batch-fee-card__head">
+                      <div>
+                        <strong>Chỉnh bảng phí cho lần tạo này</strong>
+                        <span>Giá trị tại đây chỉ áp dụng cho đợt tạo hóa đơn hiện tại.</span>
+                      </div>
+                      <label className="invoice-batch-toggle">
+                        <input
+                          type="checkbox"
+                          checked={!!batchFeeDraft?.useTieredElectric}
+                          onChange={(e) => setBatchFeeDraft(p => ({ ...p, useTieredElectric: e.target.checked }))}
+                        />
+                        Điện lũy tiến
+                      </label>
+                    </div>
+
+                    <div className="invoice-batch-fee-grid">
+                      {!batchFeeDraft?.useTieredElectric && (
+                        <div className="form-field">
+                          <label className="form-label">Đơn giá điện (VNĐ/kWh)</label>
+                          <input className="form-input" value={formatInputCurrency(batchFeeDraft?.electricFee)}
+                            onChange={(e) => setBatchFeeDraft(p => ({ ...p, electricFee: parseInputCurrency(e.target.value) }))} placeholder="0" />
+                        </div>
+                      )}
+                      <div className="form-field">
+                        <label className="form-label">Đơn giá nước (VNĐ/m3)</label>
+                        <input className="form-input" value={formatInputCurrency(batchFeeDraft?.waterFee)}
+                          onChange={(e) => setBatchFeeDraft(p => ({ ...p, waterFee: parseInputCurrency(e.target.value) }))} placeholder="0" />
+                      </div>
+                      <div className="form-field">
+                        <label className="form-label">Phí quản lý (VNĐ)</label>
+                        <input className="form-input" value={formatInputCurrency(batchFeeDraft?.managementFee)}
+                          onChange={(e) => setBatchFeeDraft(p => ({ ...p, managementFee: parseInputCurrency(e.target.value) }))} placeholder="0" />
+                      </div>
+                      <div className="form-field">
+                        <label className="form-label">Xe máy (VNĐ/xe)</label>
+                        <input className="form-input" value={formatInputCurrency(batchFeeDraft?.motorbikeParkingFee)}
+                          onChange={(e) => setBatchFeeDraft(p => ({ ...p, motorbikeParkingFee: parseInputCurrency(e.target.value) }))} placeholder="0" />
+                      </div>
+                      <div className="form-field">
+                        <label className="form-label">Ô tô (VNĐ/xe)</label>
+                        <input className="form-input" value={formatInputCurrency(batchFeeDraft?.carParkingFee)}
+                          onChange={(e) => setBatchFeeDraft(p => ({ ...p, carParkingFee: parseInputCurrency(e.target.value) }))} placeholder="0" />
+                      </div>
+                      <div className="form-field">
+                        <label className="form-label">Xe đạp (VNĐ/xe)</label>
+                        <input className="form-input" value={formatInputCurrency(batchFeeDraft?.bicycleParkingFee)}
+                          onChange={(e) => setBatchFeeDraft(p => ({ ...p, bicycleParkingFee: parseInputCurrency(e.target.value) }))} placeholder="0" />
+                      </div>
+                      <div className="form-field">
+                        <label className="form-label">Xe máy điện (VNĐ/xe)</label>
+                        <input className="form-input" value={formatInputCurrency(batchFeeDraft?.electricMotorbikeParkingFee)}
+                          onChange={(e) => setBatchFeeDraft(p => ({ ...p, electricMotorbikeParkingFee: parseInputCurrency(e.target.value) }))} placeholder="0" />
+                      </div>
+                      <div className="invoice-extra-fees invoice-batch-extra-fees">
+                        <div className="invoice-extra-fees__head">
+                          <div>
+                            <strong>Phí phát sinh</strong>
+                            <span>Thêm từng khoản phí áp dụng cho toàn bộ hóa đơn được tạo.</span>
+                          </div>
+                          <div className="invoice-extra-fees__actions">
+                            <b>{formatInputCurrency(batchOtherFeeSummary.total)}đ</b>
+                            <button type="button" className="invoice-extra-fees__add" onClick={handleAddBatchOtherFeeItem}>
+                              {Icons.plus}
+                              <span>Thêm phí</span>
+                            </button>
+                          </div>
+                        </div>
+                        <div className="invoice-extra-fees__list">
+                          {batchOtherFeeItems.map((item, index) => {
+                            const isOnlyBlankRow = batchOtherFeeItems.length === 1 && !item.description && !item.amount;
+                            return (
+                              <div className="invoice-extra-fees__row" key={item.id}>
+                                <div className="form-field invoice-extra-fees__desc" style={{ marginBottom: 0 }}>
+                                  <label className="form-label">Mô tả khoản phí {index + 1}</label>
+                                  <input
+                                    className="form-input"
+                                    value={item.description || ''}
+                                    onChange={(e) => handleBatchOtherFeeItemChange(item.id, 'description', e.target.value)}
+                                    placeholder="VD: Phí sửa chữa phát sinh..."
+                                  />
+                                </div>
+                                <div className="form-field invoice-extra-fees__amount" style={{ marginBottom: 0 }}>
+                                  <label className="form-label">Số tiền (VNĐ)</label>
+                                  <input
+                                    className="form-input"
+                                    value={formatInputCurrency(item.amount)}
+                                    onChange={(e) => handleBatchOtherFeeItemChange(item.id, 'amount', e.target.value)}
+                                    placeholder="0"
+                                  />
+                                </div>
+                                <button
+                                  type="button"
+                                  className="invoice-extra-fees__remove"
+                                  disabled={isOnlyBlankRow}
+                                  onClick={() => handleRemoveBatchOtherFeeItem(item.id)}
+                                  title="Xóa khoản phí"
+                                >
+                                  {Icons.trash}
+                                </button>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </section>
+
+                <section className="invoice-batch-panel invoice-batch-panel--apartments">
+                  <div className="invoice-batch-section-head invoice-batch-section-head--apartments">
+                    <div>
+                      <span>Phạm vi phát hành</span>
+                      <strong>Chọn căn hộ</strong>
+                    </div>
+                    <em>
+                      {filteredBatchApartments.length} căn hộ phù hợp
+                      {batchInvoicePeriodLabel && ` · ${batchExistingInvoiceCount} đã có hóa đơn kỳ ${batchInvoicePeriodLabel}`}
+                      {periodInvoicesLoading && ' · Đang kiểm tra'}
+                    </em>
+                  </div>
+
+                  <div className="invoice-batch-apartment-toolbar">
+                    <div className="invoice-batch-filter-row">
+                      <DropdownSelect
+                        value={batchFilterBlock}
+                        onChange={(value) => {
+                          setBatchFilterBlock(value);
+                          setBatchFilterFloor('');
+                        }}
+                        options={[
+                          { value: '', label: 'Tất cả tòa' },
+                          ...[...new Set(apartments.map((apartment) => apartment.block).filter(Boolean))]
+                            .sort()
+                            .map((block) => ({ value: block, label: `Block ${block}` })),
+                        ]}
+                      />
+                      <DropdownSelect
+                        value={batchFilterFloor}
+                        onChange={(value) => setBatchFilterFloor(value)}
+                        options={[
+                          { value: '', label: 'Tất cả tầng' },
+                          ...[...new Set(apartments
+                            .filter((apartment) => !batchFilterBlock || apartment.block === batchFilterBlock)
+                            .map((apartment) => apartment.floor)
+                            .filter((floor) => floor != null))]
+                            .sort((a, b) => a - b)
+                            .map((floor) => ({ value: floor, label: `Tầng ${floor}` })),
+                        ]}
+                      />
+                      <div className="invoice-batch-select-actions" aria-label="Chọn nhanh căn hộ">
+                        <button type="button" title="Chọn tất cả căn hộ đang lọc" onClick={() => {
+                          setBatchSelectedApts(prev => [...new Set([...prev, ...filteredBatchApartments.map(a => a.id)])]);
                         }}>
+                          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                            <path d="M20 6 9 17l-5-5" />
+                          </svg>
+                          <span>Chọn</span>
+                        </button>
+                        <button type="button" title="Bỏ chọn các căn hộ đang lọc" onClick={() => {
+                          const filteredIds = new Set(filteredBatchApartments.map(a => a.id));
+                          setBatchSelectedApts(prev => prev.filter(id => !filteredIds.has(id)));
+                        }}>
+                          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                            <path d="M18 6 6 18" />
+                            <path d="m6 6 12 12" />
+                          </svg>
+                          <span>Bỏ</span>
+                        </button>
+                      </div>
+                    </div>
+                    <div className="invoice-batch-status-filter" aria-label="Lọc theo trạng thái hóa đơn">
+                      {[
+                        { value: 'ALL', label: 'Tất cả', count: scopedBatchApartments.length },
+                        { value: 'HAS_INVOICE', label: 'Đã có hóa đơn', count: batchScopedExistingInvoiceCount },
+                        { value: 'NO_INVOICE', label: 'Chưa có hóa đơn', count: batchScopedNoInvoiceCount },
+                      ].map((option) => (
+                        <button
+                          key={option.value}
+                          type="button"
+                          className={batchInvoiceFilter === option.value ? 'invoice-batch-status-filter__btn invoice-batch-status-filter__btn--active' : 'invoice-batch-status-filter__btn'}
+                          onClick={() => setBatchInvoiceFilter(option.value)}
+                        >
+                          <span>{option.label}</span>
+                          <b>{option.count}</b>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="invoice-batch-apartment-list">
+                    {filteredBatchApartments.length === 0 ? (
+                      <div className="invoice-batch-empty">Không có căn hộ phù hợp với bộ lọc hiện tại.</div>
+                    ) : filteredBatchApartments.map((apt) => {
+                      const checked = batchSelectedApts.includes(apt.id);
+                      const owner = getApartmentOwner(apt);
+                      const tenant = getApartmentTenant(apt);
+                      const existingInvoice = invoicePeriodByApartmentId.get(String(apt.id));
+                      return (
+                        <label key={apt.id} className={`invoice-batch-apartment-row ${checked ? 'invoice-batch-apartment-row--selected' : ''} ${existingInvoice ? 'invoice-batch-apartment-row--has-invoice' : ''}`}>
                           <input type="checkbox" checked={checked}
                             onChange={() => setBatchSelectedApts(prev => checked ? prev.filter(id => id !== apt.id) : [...prev, apt.id])}
-                            style={{ width: '15px', height: '15px', flexShrink: 0, accentColor: '#6366f1' }} />
-                          <span style={{ fontWeight: 600, fontSize: '0.82rem', color: '#1e293b', minWidth: '48px' }}>{apt.apartmentNumber}</span>
-                          <span style={{ fontSize: '0.72rem', color: '#94a3b8', minWidth: '90px', flexShrink: 0 }}>T{apt.floor} - {apt.block}</span>
-                          <div style={{ flex: 1, display: 'flex', flexWrap: 'wrap', gap: '0.15rem 0.75rem', justifyContent: 'flex-end', fontSize: '0.78rem' }}>
+                          />
+                          <div className="invoice-batch-apartment-main">
+                            <strong>
+                              {apt.apartmentNumber}
+                              {existingInvoice && (
+                                <i className="invoice-batch-status-badge" title={`Căn hộ đã có hóa đơn kỳ ${batchInvoicePeriodLabel || 'này'}`}>
+                                  Đã có hóa đơn
+                                </i>
+                              )}
+                            </strong>
+                            <span>{apt.block ? `Block ${apt.block}` : 'Chưa rõ block'} · Tầng {apt.floor ?? '—'}</span>
+                            {existingInvoice && (
+                              <small className="invoice-batch-existing-note">
+                                Sẽ bỏ qua khi tạo hàng loạt
+                              </small>
+                            )}
+                          </div>
+                          <div className="invoice-batch-apartment-people">
                             {owner && (
-                              <span style={{ color: '#334155', whiteSpace: 'nowrap' }}>
-                                {owner.fullName}<span style={badgeStyle(true)}>Chủ</span>
-                                {owner.phone && <span style={{ color: '#94a3b8', marginLeft: '4px' }}>{owner.phone}</span>}
+                              <span>
+                                <b>{owner.fullName}</b>
+                                <i className="invoice-batch-person-badge invoice-batch-person-badge--owner">Chủ</i>
+                                {(owner.phone || owner.phoneNumber) && <small>{owner.phone || owner.phoneNumber}</small>}
                               </span>
                             )}
                             {tenant && (
-                              <span style={{ color: '#334155', whiteSpace: 'nowrap' }}>
-                                {tenant.fullName}<span style={badgeStyle(false)}>Thuê</span>
-                                {tenant.phone && <span style={{ color: '#94a3b8', marginLeft: '4px' }}>{tenant.phone}</span>}
+                              <span>
+                                <b>{tenant.fullName}</b>
+                                <i className="invoice-batch-person-badge invoice-batch-person-badge--tenant">Thuê</i>
+                                {(tenant.phone || tenant.phoneNumber) && <small>{tenant.phone || tenant.phoneNumber}</small>}
                               </span>
                             )}
                           </div>
                         </label>
                       );
                     })}
-                </div>
+                  </div>
+                </section>
               </div>
             </div>
-            <div className="modal__footer">
+            <div className="modal__footer invoice-batch-modal__footer">
               <button className="btn btn--ghost" onClick={() => setBatchModalOpen(false)}>Hủy</button>
               <button className="btn btn--primary" disabled={batchSubmitting || batchSelectedApts.length === 0 || !batchDueDate}
                 onClick={async () => {
@@ -2487,15 +4663,32 @@ export default function InvoicesPage() {
                   try {
                     const user = JSON.parse(localStorage.getItem('user') || '{}');
                     const fee = tableFees[batchFeeIndex];
+                    const otherFeeSummary = getFormOtherFeeSummary(batchFeeDraft);
                       const [dd, mm, yyyy] = batchDueDate.split('/');
                       const res = await invoiceService.batchCreate({
                       apartmentIds: batchSelectedApts,
                       dueDate: `${yyyy}-${mm}-${dd}`,
                       creatorId: user.id,
                       tableFeeId: fee.id,
+                      electricFee: batchFeeDraft?.useTieredElectric ? 0 : Number(batchFeeDraft?.electricFee) || 0,
+                      waterFee: Number(batchFeeDraft?.waterFee) || 0,
+                      managementFee: Number(batchFeeDraft?.managementFee) || 0,
+                      motorbikeParkingFee: Number(batchFeeDraft?.motorbikeParkingFee) || 0,
+                      carParkingFee: Number(batchFeeDraft?.carParkingFee) || 0,
+                      bicycleParkingFee: Number(batchFeeDraft?.bicycleParkingFee) || 0,
+                      electricMotorbikeParkingFee: Number(batchFeeDraft?.electricMotorbikeParkingFee) || 0,
+                      otherFee: otherFeeSummary.total,
+                      descriptionOtherFee: otherFeeSummary.description,
+                      useTieredElectric: !!batchFeeDraft?.useTieredElectric,
                     });
                     if (res.data?.status) {
-                      toast.success(`Đã tạo ${res.data.data.length} hóa đơn thành công!`);
+                      const createdCount = res.data.data.length;
+                      const skippedCount = batchSelectedApts.length - createdCount;
+                      toast.success(
+                        skippedCount > 0
+                          ? `Đã tạo ${createdCount} hóa đơn, bỏ qua ${skippedCount} căn hộ đã có hóa đơn.`
+                          : `Đã tạo ${createdCount} hóa đơn thành công!`
+                      );
                       setBatchModalOpen(false);
                       fetchInvoices();
                     } else {
@@ -2512,7 +4705,7 @@ export default function InvoicesPage() {
             </div>
           </div>
         </div>
-      )}
+      ), document.body)}
     </div>
   );
 }

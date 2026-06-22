@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { toast } from 'react-toastify';
 import DatePicker, { registerLocale } from 'react-datepicker';
@@ -9,6 +10,7 @@ import deviceService from '../services/deviceService';
 import userService from '../services/userService';
 import apartmentService from '../services/apartmentService';
 import { useAuth } from '../contexts/AuthContext';
+import DropdownSelect from '../components/common/DropdownSelect';
 
 registerLocale('vi', vi);
 
@@ -36,20 +38,6 @@ const statusColor = {
 };
 
 const PAGE_SIZE = 10;
-
-const deviceStatusLabel = {
-  ACTIVE: 'Hoạt động',
-  INACTIVE: 'Ngừng hoạt động',
-  UNDER_MAINTENANCE: 'Đang bảo trì',
-  BROKEN: 'Hỏng',
-};
-
-const deviceStatusColor = {
-  ACTIVE: { color: '#059669', bg: '#d1fae5' },
-  INACTIVE: { color: '#6b7280', bg: '#f3f4f6' },
-  UNDER_MAINTENANCE: { color: '#d97706', bg: '#fef3c7' },
-  BROKEN: { color: '#dc2626', bg: '#fee2e2' },
-};
 
 /* ─── icons ─── */
 const Icons = {
@@ -173,6 +161,16 @@ const getInitials = (name) => {
   return name.split(' ').map(n => n[0]).join('').toUpperCase().substring(0, 2);
 };
 
+const getApartmentId = (apartment) => apartment?.id ?? apartment?.apartmentId ?? '';
+const getDeviceId = (device) => device?.id ?? device?.deviceId ?? '';
+const getDeviceApartmentId = (device) => (
+  device?.apartment?.id
+  ?? device?.apartment?.apartmentId
+  ?? device?.apartmentId
+  ?? ''
+);
+const isMaintenanceCompleted = (maintenance) => maintenance?.maintenanceStatus === 'COMPLETED';
+
 export default function MaintenancesPage() {
   const location = useLocation();
   const navigate = useNavigate();
@@ -217,13 +215,22 @@ export default function MaintenancesPage() {
   const [formErrors, setFormErrors] = useState({});
   const [submitting, setSubmitting] = useState(false);
   const [targetType, setTargetType] = useState('APARTMENT'); // SYSTEM | APARTMENT
+  const lockedFromFeedback = modalMode === 'create' && !!formData.feedbackId && (!!formData.apartmentId || !!formData.deviceId);
+
+  useEffect(() => {
+    if (!modalOpen) return undefined;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [modalOpen]);
 
   // Dropdown data
   const [devices, setDevices] = useState([]);
   const [technicians, setTechnicians] = useState([]);
   const [apartments, setApartments] = useState([]);
   const [deviceSearchKeyword, setDeviceSearchKeyword] = useState('');
-  const [deviceStatusFilter, setDeviceStatusFilter] = useState('');
   const [apartmentSearchKeyword, setApartmentSearchKeyword] = useState('');
   const [techSearchKeyword, setTechSearchKeyword] = useState('');
 
@@ -270,6 +277,16 @@ export default function MaintenancesPage() {
 
   useEffect(() => { fetchMaintenances(); }, [fetchMaintenances]);
   useEffect(() => { fetchDropdownData(); }, [fetchDropdownData]);
+
+  useEffect(() => {
+    if (!formData.feedbackId || formData.apartmentId || !formData.deviceId || devices.length === 0) return;
+    const linkedDevice = devices.find((device) => String(getDeviceId(device)) === String(formData.deviceId));
+    const linkedApartmentId = getDeviceApartmentId(linkedDevice);
+    if (linkedApartmentId) {
+      setFormData(prev => ({ ...prev, apartmentId: linkedApartmentId }));
+      setTargetType('APARTMENT');
+    }
+  }, [devices, formData.apartmentId, formData.deviceId, formData.feedbackId]);
 
   // Handle feedback link from query params
   useEffect(() => {
@@ -353,6 +370,10 @@ export default function MaintenancesPage() {
   };
 
   const openEditModal = (m) => {
+    if (isMaintenanceCompleted(m)) {
+      toast.info('Lịch bảo trì đã hoàn thành nên không thể chỉnh sửa.');
+      return;
+    }
     setModalMode('edit');
     setSelectedMaintenance(m);
     setFormData({
@@ -436,6 +457,11 @@ export default function MaintenancesPage() {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    if (modalMode === 'edit' && isMaintenanceCompleted(selectedMaintenance)) {
+      toast.info('Lịch bảo trì đã hoàn thành nên không thể chỉnh sửa.');
+      setModalOpen(false);
+      return;
+    }
     if (!validateForm()) return;
     setSubmitting(true);
     try {
@@ -551,6 +577,7 @@ export default function MaintenancesPage() {
             <tbody>
               {maintenances.map((m) => {
                 const sc = statusColor[m.maintenanceStatus] || { color: '#6b7280', bg: '#f3f4f6' };
+                const completed = isMaintenanceCompleted(m);
                 return (
                   <tr key={m.maintenanceId}>
                     <td className="data-table__cell--id">{m.maintenanceId}</td>
@@ -572,10 +599,17 @@ export default function MaintenancesPage() {
                     </td>
                     <td>
                       <div className="action-btns">
-                        <button className="action-btn action-btn--view" title="Xem" onClick={() => openViewModal(m)}>
+                        <button className="action-btn action-btn--view" data-tooltip="Xem chi tiết" aria-label="Xem chi tiết" onClick={() => openViewModal(m)}>
                           {Icons.eye}
                         </button>
-                        <button className="action-btn action-btn--edit" title="Sửa" onClick={() => openEditModal(m)}>
+                        <button
+                          className="action-btn action-btn--edit"
+                          data-tooltip={completed ? 'Đã hoàn thành' : 'Chỉnh sửa'}
+                          aria-label={completed ? 'Đã hoàn thành, không thể chỉnh sửa' : 'Chỉnh sửa'}
+                          title={completed ? 'Bảo trì đã hoàn thành, không thể chỉnh sửa' : 'Chỉnh sửa'}
+                          disabled={completed}
+                          onClick={() => openEditModal(m)}
+                        >
                           {Icons.edit}
                         </button>
                       </div>
@@ -628,9 +662,9 @@ export default function MaintenancesPage() {
       )}
 
       {/* Create/Edit Modal */}
-      {modalOpen && modalMode !== 'view' && (
-        <div className="modal-overlay" onClick={() => setModalOpen(false)}>
-          <div className="modal modal--lg" style={{ maxWidth: '900px' }} onClick={(e) => e.stopPropagation()}>
+      {modalOpen && modalMode !== 'view' && createPortal((
+        <div className="modal-overlay maintenance-form-overlay" onClick={() => setModalOpen(false)}>
+          <div className="modal modal--maintenance maintenance-form-modal" onClick={(e) => e.stopPropagation()}>
             <div className="modal__header">
               <h3 className="modal__title">
                 {modalMode === 'create' ? 'Tạo lịch bảo trì mới' : 'Chỉnh sửa thông tin bảo trì'}
@@ -674,15 +708,11 @@ export default function MaintenancesPage() {
                     </div>
                     <div className="form-field">
                       <label className="form-label">Trạng thái</label>
-                      <select
-                        className="form-input"
+                      <DropdownSelect
                         value={formData.maintenanceStatus}
-                        onChange={(e) => handleFormChange('maintenanceStatus', e.target.value)}
-                      >
-                        {STATUSES.filter(s => s.value).map(s => (
-                          <option key={s.value} value={s.value}>{s.label}</option>
-                        ))}
-                      </select>
+                        onChange={(value) => handleFormChange('maintenanceStatus', value)}
+                        options={STATUSES.filter((status) => status.value)}
+                      />
                     </div>
                     <div className="form-field">
                       <label className="form-label">Chi phí (VNĐ)</label>
@@ -755,18 +785,34 @@ export default function MaintenancesPage() {
                       <button 
                         type="button"
                         className={`mt-target-tab ${targetType === 'APARTMENT' ? 'mt-target-tab--active' : ''}`}
-                        onClick={() => { setTargetType('APARTMENT'); handleFormChange('deviceId', ''); }}
+                        disabled={lockedFromFeedback}
+                        onClick={() => {
+                          if (lockedFromFeedback) return;
+                          setTargetType('APARTMENT');
+                          handleFormChange('deviceId', '');
+                        }}
                       >
                         🏠 Căn hộ
                       </button>
                       <button 
                         type="button"
                         className={`mt-target-tab ${targetType === 'SYSTEM' ? 'mt-target-tab--active' : ''}`}
-                        onClick={() => { setTargetType('SYSTEM'); handleFormChange('apartmentId', ''); handleFormChange('deviceId', ''); }}
+                        disabled={lockedFromFeedback}
+                        onClick={() => {
+                          if (lockedFromFeedback) return;
+                          setTargetType('SYSTEM');
+                          handleFormChange('apartmentId', '');
+                          handleFormChange('deviceId', '');
+                        }}
                       >
                         🏢 Hệ thống
                       </button>
                     </div>
+                    {lockedFromFeedback && (
+                      <div className="mt-feedback-lock-note">
+                        Đối tượng được lấy từ phản hồi bảo trì nên không thể đổi căn hộ hoặc thiết bị.
+                      </div>
+                    )}
 
                     <div style={{ marginTop: '16px' }}>
                       {targetType === 'APARTMENT' ? (
@@ -777,22 +823,32 @@ export default function MaintenancesPage() {
                               <input
                                 type="text"
                                 className="search-input"
-                                placeholder="Tìm căn hộ..."
+                                placeholder={lockedFromFeedback ? 'Căn hộ đã được gắn từ phản hồi' : 'Tìm căn hộ...'}
                                 value={apartmentSearchKeyword}
                                 onChange={(e) => setApartmentSearchKeyword(e.target.value)}
+                                disabled={lockedFromFeedback}
                               />
                             </div>
-                            <div className="resident-select" style={{ maxHeight: '120px' }}>
+                            <div className={`resident-select ${lockedFromFeedback ? 'resident-select--locked' : ''}`} style={{ maxHeight: '120px' }}>
                               <div className="resident-select__grid">
                                 {apartments
-                                  .filter(a => !apartmentSearchKeyword.trim() || getApartmentLabel(a).toLowerCase().includes(apartmentSearchKeyword.toLowerCase()))
+                                  .filter(a => {
+                                    const aptId = getApartmentId(a);
+                                    if (lockedFromFeedback) return String(aptId) === String(formData.apartmentId);
+                                    return !apartmentSearchKeyword.trim() || getApartmentLabel(a).toLowerCase().includes(apartmentSearchKeyword.toLowerCase());
+                                  })
                                   .map(a => (
-                                    <label key={a.id} className={`resident-select__item ${String(formData.apartmentId) === String(a.id) ? 'resident-select__item--active' : ''}`}>
+                                    <label key={getApartmentId(a)} className={`resident-select__item ${lockedFromFeedback ? 'resident-select__item--locked' : ''} ${String(formData.apartmentId) === String(getApartmentId(a)) ? 'resident-select__item--active' : ''}`}>
                                       <input 
                                         type="radio" 
                                         name="apt" 
-                                        checked={String(formData.apartmentId) === String(a.id)} 
-                                        onChange={() => { handleFormChange('apartmentId', a.id); handleFormChange('deviceId', ''); }}
+                                        checked={String(formData.apartmentId) === String(getApartmentId(a))}
+                                        disabled={lockedFromFeedback}
+                                        onChange={() => {
+                                          if (lockedFromFeedback) return;
+                                          handleFormChange('apartmentId', getApartmentId(a));
+                                          handleFormChange('deviceId', '');
+                                        }}
                                       />
                                       <div className="resident-select__info">
                                         <span className="resident-select__name">{getApartmentLabel(a)}</span>
@@ -805,16 +861,30 @@ export default function MaintenancesPage() {
 
                           <div className="form-field" style={{ marginTop: '10px' }}>
                             <label className="form-label">Chọn Thiết bị (Nếu có)</label>
-                            <div className="resident-select" style={{ maxHeight: '120px' }}>
+                            <div className={`resident-select ${lockedFromFeedback ? 'resident-select--locked' : ''}`} style={{ maxHeight: '120px' }}>
                               {!formData.apartmentId ? (
                                 <p className="resident-select__empty">Vui lòng chọn căn hộ trước</p>
                               ) : (
                                 <div className="resident-select__grid">
                                   {devices
-                                    .filter(d => String(d.apartment?.id) === String(formData.apartmentId))
+                                    .filter(d => {
+                                      const deviceId = getDeviceId(d);
+                                      const deviceApartmentId = getDeviceApartmentId(d);
+                                      if (lockedFromFeedback && formData.deviceId) return String(deviceId) === String(formData.deviceId);
+                                      return String(deviceApartmentId) === String(formData.apartmentId);
+                                    })
                                     .map(d => (
-                                      <label key={d.id} className={`resident-select__item ${String(formData.deviceId) === String(d.id) ? 'resident-select__item--active' : ''}`}>
-                                        <input type="radio" name="dev" checked={String(formData.deviceId) === String(d.id)} onChange={() => handleFormChange('deviceId', d.id)} />
+                                      <label key={getDeviceId(d)} className={`resident-select__item ${lockedFromFeedback ? 'resident-select__item--locked' : ''} ${String(formData.deviceId) === String(getDeviceId(d)) ? 'resident-select__item--active' : ''}`}>
+                                        <input
+                                          type="radio"
+                                          name="dev"
+                                          checked={String(formData.deviceId) === String(getDeviceId(d))}
+                                          disabled={lockedFromFeedback}
+                                          onChange={() => {
+                                            if (lockedFromFeedback) return;
+                                            handleFormChange('deviceId', getDeviceId(d));
+                                          }}
+                                        />
                                         <div className="resident-select__info"><span className="resident-select__name">{d.deviceName}</span></div>
                                       </label>
                                     ))}
@@ -830,18 +900,32 @@ export default function MaintenancesPage() {
                             <input
                               type="text"
                               className="search-input"
-                              placeholder="Tìm thiết bị chung..."
+                              placeholder={lockedFromFeedback ? 'Thiết bị đã được gắn từ phản hồi' : 'Tìm thiết bị chung...'}
                               value={deviceSearchKeyword}
                               onChange={(e) => setDeviceSearchKeyword(e.target.value)}
+                              disabled={lockedFromFeedback}
                             />
                           </div>
-                          <div className="resident-select" style={{ maxHeight: '300px' }}>
+                          <div className={`resident-select ${lockedFromFeedback ? 'resident-select--locked' : ''}`} style={{ maxHeight: '300px' }}>
                             <div className="resident-select__grid">
                               {devices
-                                .filter(d => d.deviceType === 'COMMON' && (!deviceSearchKeyword.trim() || d.deviceName?.toLowerCase().includes(deviceSearchKeyword.toLowerCase())))
+                                .filter(d => {
+                                  const deviceId = getDeviceId(d);
+                                  if (lockedFromFeedback && formData.deviceId) return String(deviceId) === String(formData.deviceId);
+                                  return d.deviceType === 'COMMON' && (!deviceSearchKeyword.trim() || d.deviceName?.toLowerCase().includes(deviceSearchKeyword.toLowerCase()));
+                                })
                                 .map(d => (
-                                  <label key={d.id} className={`resident-select__item ${String(formData.deviceId) === String(d.id) ? 'resident-select__item--active' : ''}`}>
-                                    <input type="radio" name="sys-dev" checked={String(formData.deviceId) === String(d.id)} onChange={() => handleFormChange('deviceId', d.id)} />
+                                  <label key={getDeviceId(d)} className={`resident-select__item ${lockedFromFeedback ? 'resident-select__item--locked' : ''} ${String(formData.deviceId) === String(getDeviceId(d)) ? 'resident-select__item--active' : ''}`}>
+                                    <input
+                                      type="radio"
+                                      name="sys-dev"
+                                      checked={String(formData.deviceId) === String(getDeviceId(d))}
+                                      disabled={lockedFromFeedback}
+                                      onChange={() => {
+                                        if (lockedFromFeedback) return;
+                                        handleFormChange('deviceId', getDeviceId(d));
+                                      }}
+                                    />
                                     <div className="resident-select__info"><span className="resident-select__name">{d.deviceName}</span></div>
                                   </label>
                                 ))}
@@ -864,13 +948,13 @@ export default function MaintenancesPage() {
             </form>
           </div>
         </div>
-      )}
+      ), document.body)}
 
 
       {/* View Modal */}
-      {modalOpen && modalMode === 'view' && selectedMaintenance && (
-        <div className="modal-overlay" onClick={() => setModalOpen(false)}>
-          <div className="modal modal--lg" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '800px' }}>
+      {modalOpen && modalMode === 'view' && selectedMaintenance && createPortal((
+        <div className="modal-overlay maintenance-detail-overlay" onClick={() => setModalOpen(false)}>
+          <div className="modal modal--lg maintenance-detail-modal" onClick={(e) => e.stopPropagation()}>
             <div className="modal__header">
               <h3 className="modal__title">Chi tiết lịch bảo trì #{selectedMaintenance.maintenanceId}</h3>
               <button className="modal__close" onClick={() => setModalOpen(false)}>{Icons.close}</button>
@@ -990,27 +1074,28 @@ export default function MaintenancesPage() {
                 </button>
               )}
 
-              {selectedMaintenance.maintenanceStatus === 'COMPLETED' && isTechnician && (
+              {selectedMaintenance.maintenanceStatus === 'COMPLETED' && (
                 <div style={{ color: '#10b981', display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.9rem', fontWeight: 600 }}>
                   {Icons.check} Công việc đã hoàn tất
                 </div>
               )}
 
-              {/* Keep edit button as secondary option */}
-              <button
-                className="btn btn--ghost"
-                style={{ border: '1px solid #e2e8f0' }}
-                onClick={() => {
-                  setModalOpen(false);
-                  setTimeout(() => openEditModal(selectedMaintenance), 100);
-                }}
-              >
-                Chỉnh sửa chi tiết
-              </button>
+              {!isMaintenanceCompleted(selectedMaintenance) && (
+                <button
+                  className="btn btn--ghost"
+                  style={{ border: '1px solid #e2e8f0' }}
+                  onClick={() => {
+                    setModalOpen(false);
+                    setTimeout(() => openEditModal(selectedMaintenance), 100);
+                  }}
+                >
+                  Chỉnh sửa chi tiết
+                </button>
+              )}
             </div>
           </div>
         </div>
-      )}
+      ), document.body)}
     </div>
   );
 }

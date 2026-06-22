@@ -24,6 +24,13 @@ export default defineConfig([
     },
     rules: {
       'no-unused-vars': ['error', { varsIgnorePattern: '^[A-Z_]' }],
+      'no-restricted-syntax': [
+        'error',
+        {
+          selector: 'JSXOpeningElement[name.name="select"]',
+          message: 'Use src/components/common/DropdownSelect.jsx instead of native <select> to keep dropdown UI consistent.',
+        },
+      ],
     },
   },
 ])

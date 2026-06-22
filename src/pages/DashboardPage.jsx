@@ -112,6 +112,8 @@ export default function DashboardPage() {
   const { user } = useAuth();
   const [loading, setLoading] = useState(true);
   const [stats, setStats] = useState({
+    complexes: 0,
+    buildings: 0,
     apartments: 0,
     residents: 0,
     devices: 0,
@@ -122,6 +124,7 @@ export default function DashboardPage() {
   const [recentFeedbacks, setRecentFeedbacks] = useState([]);
   const [recentInvoices, setRecentInvoices] = useState([]);
   const [recentMaintenances, setRecentMaintenances] = useState([]);
+  const [buildingReport, setBuildingReport] = useState([]);
   const [chartData, setChartData] = useState({
     revenueByMonth: { labels: [], paid: [], unpaid: [] },
     paymentRate: { paid: 0, unpaid: 0 },
@@ -143,6 +146,7 @@ export default function DashboardPage() {
         invoicesRes,
         feedbacksRes,
         maintenancesRes,
+        apartmentStatsRes,
       ] = await Promise.allSettled([
         apartmentService.getAll({ page: 0, size: 9999 }),
         residentService.getAll({ page: 0, size: 1 }),
@@ -150,6 +154,7 @@ export default function DashboardPage() {
         invoiceService.getAll({ page: 0, size: 9999, direction: 'desc', sortBy: 'id' }),
         feedbackService.getAll({ page: 0, size: 9999, direction: 'desc', sortBy: 'id' }),
         maintenanceService.getAll({ page: 0, size: 5, direction: 'desc', sortBy: 'id' }),
+        apartmentService.getStatistics({ groupBy: 'BLOCK' }),
       ]);
 
       const getValue = (res) => res.status === 'fulfilled' ? res.value?.data?.data : null;
@@ -160,8 +165,13 @@ export default function DashboardPage() {
       const invoices = getValue(invoicesRes);
       const feedbacks = getValue(feedbacksRes);
       const maintenances = getValue(maintenancesRes);
+      const apartmentStats = getValue(apartmentStatsRes);
+      const buildingItems = apartmentStats?.items ?? [];
+      const complexCount = new Set((apartments?.content ?? []).map((a) => a.complexName || 'Hưng Thịnh')).size;
 
       setStats({
+        complexes: complexCount,
+        buildings: buildingItems.length,
         apartments: apartments?.totalElements ?? 0,
         residents: residents?.totalElements ?? 0,
         devices: devices?.totalElements ?? 0,
@@ -173,6 +183,7 @@ export default function DashboardPage() {
       setRecentFeedbacks(feedbacks?.content?.slice(0, 5) ?? []);
       setRecentInvoices(invoices?.content?.slice(0, 5) ?? []);
       setRecentMaintenances(maintenances?.content?.slice(0, 5) ?? []);
+      setBuildingReport(buildingItems.slice(0, 6));
 
       // ── Chart data processing ──
       const allInvoices = invoices?.content ?? [];
@@ -225,12 +236,14 @@ export default function DashboardPage() {
   };
 
   const statCards = [
-    { key: 'apartment', label: 'Tổng căn hộ', value: stats.apartments, color: '#3b82f6', bg: 'linear-gradient(135deg, #dbeafe 0%, #bfdbfe 100%)' },
-    { key: 'resident', label: 'Tổng cư dân', value: stats.residents, color: '#8b5cf6', bg: 'linear-gradient(135deg, #ede9fe 0%, #ddd6fe 100%)' },
-    { key: 'device', label: 'Thiết bị', value: stats.devices, color: '#06b6d4', bg: 'linear-gradient(135deg, #cffafe 0%, #a5f3fc 100%)' },
-    { key: 'invoice', label: 'HĐ chưa thanh toán', value: stats.unpaidInvoices, color: '#ef4444', bg: 'linear-gradient(135deg, #fee2e2 0%, #fecaca 100%)' },
-    { key: 'feedback', label: 'Phản hồi chờ xử lý', value: stats.pendingFeedbacks, color: '#f59e0b', bg: 'linear-gradient(135deg, #fef3c7 0%, #fde68a 100%)' },
-    { key: 'maintenance', label: 'Bảo trì đã lên lịch', value: stats.scheduledMaintenances, color: '#10b981', bg: 'linear-gradient(135deg, #d1fae5 0%, #a7f3d0 100%)' },
+    { key: 'complex', icon: 'apartment', label: 'Khu chung cư', caption: 'Cụm/dự án đang quản lý', value: stats.complexes, color: '#0f766e', tone: 'green' },
+    { key: 'building', icon: 'apartment', label: 'Tòa nhà', caption: 'Phân hệ theo block', value: stats.buildings, color: '#2563eb', tone: 'blue' },
+    { key: 'apartment', label: 'Tổng căn hộ', caption: 'Quy mô đang quản lý', value: stats.apartments, color: '#3b82f6', tone: 'blue' },
+    { key: 'resident', label: 'Tổng cư dân', caption: 'Hồ sơ cư dân', value: stats.residents, color: '#8b5cf6', tone: 'violet' },
+    { key: 'device', label: 'Thiết bị', caption: 'Thiết bị vận hành', value: stats.devices, color: '#06b6d4', tone: 'cyan' },
+    { key: 'invoice', label: 'HĐ chưa thanh toán', caption: 'Cần theo dõi', value: stats.unpaidInvoices, color: '#ef4444', tone: 'red' },
+    { key: 'feedback', label: 'Phản hồi chờ xử lý', caption: 'Cần phản hồi', value: stats.pendingFeedbacks, color: '#f59e0b', tone: 'amber' },
+    { key: 'maintenance', label: 'Bảo trì đã lên lịch', caption: 'Công việc sắp tới', value: stats.scheduledMaintenances, color: '#10b981', tone: 'green' },
   ];
 
   if (loading) {
@@ -289,20 +302,75 @@ export default function DashboardPage() {
       </div>
 
       {/* Stat Cards */}
-      <div className="dashboard__stats">
-        {statCards.map((card) => (
-          <div key={card.key} className="dashboard__stat-card" style={{ background: card.bg }}>
-            <div className="dashboard__stat-icon" style={{ color: card.color }}>
-              {statIcons[card.key]}
-            </div>
-            <div className="dashboard__stat-info">
-              <span className="dashboard__stat-value" style={{ color: card.color }}>
-                {formatNumber(card.value)}
-              </span>
-              <span className="dashboard__stat-label">{card.label}</span>
-            </div>
+      <section className="dashboard__stats-panel">
+        <div className="dashboard__stats-panel-head">
+          <div>
+            <span className="dashboard__section-eyebrow">Tổng quan</span>
+            <h3>Vận hành hôm nay</h3>
           </div>
-        ))}
+          <span className="dashboard__stats-panel-note">
+            {formatNumber(stats.unpaidInvoices + stats.pendingFeedbacks + stats.scheduledMaintenances)} mục cần theo dõi
+          </span>
+        </div>
+
+        <div className="dashboard__stats dashboard__stats--overview">
+          {statCards.map((card) => (
+            <div
+              key={card.key}
+              className={`dashboard__stat-card dashboard__stat-card--${card.tone}`}
+            >
+              <div className="dashboard__stat-icon" style={{ color: card.color }}>
+                {statIcons[card.icon || card.key]}
+              </div>
+              <div className="dashboard__stat-info">
+                <span className="dashboard__stat-value" style={{ color: card.color }}>
+                  {formatNumber(card.value)}
+                </span>
+                <span className="dashboard__stat-label">{card.label}</span>
+                <span className="dashboard__stat-caption">{card.caption}</span>
+              </div>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <div className="dashboard__tables dashboard__tables--full">
+        <div className="dashboard__table-card">
+          <div className="dashboard__table-header">
+            <h3 className="dashboard__table-title">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="4" y="2" width="16" height="20" rx="2" /><path d="M9 22V12h6v10" /></svg>
+              Tổng hợp theo tòa
+            </h3>
+          </div>
+          <div className="dashboard__table-body">
+            {buildingReport.length === 0 ? (
+              <div className="dashboard__empty">Chưa có dữ liệu tòa nhà</div>
+            ) : (
+              <table className="dashboard__table">
+                <thead>
+                  <tr>
+                    <th>Khu / tòa</th>
+                    <th>Căn hộ</th>
+                    <th>Cư dân</th>
+                    <th>Công nợ</th>
+                    <th>Đã thu</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {buildingReport.map((item) => (
+                    <tr key={item.groupKey}>
+                      <td className="dashboard__cell-title">{item.groupLabel}</td>
+                      <td>{formatNumber(item.apartmentCount)}</td>
+                      <td>{formatNumber(item.residentCount)}</td>
+                      <td>{formatCurrency(item.unpaidRevenue)}</td>
+                      <td>{formatCurrency(item.paidRevenue)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+        </div>
       </div>
 
       {/* ── Charts Section ── */}

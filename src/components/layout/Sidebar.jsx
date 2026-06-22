@@ -42,6 +42,7 @@ const menuItems = [
     ),
     children: [
       { label: 'Căn hộ', path: '/apartments', roles: ['ADMIN'] },
+      { label: 'Khu & tòa nhà', path: '/building-reports', roles: ['ADMIN'] },
       { label: 'Thiết bị', path: '/devices', roles: ['ADMIN', 'TECHNICIAN'] },
     ],
   },
@@ -84,13 +85,14 @@ const menuItems = [
     ),
     children: [
       { label: 'Bảo trì', path: '/maintenances', roles: ['ADMIN', 'TECHNICIAN'] },
+      { label: 'Chỉ số điện nước', path: '/invoices', roles: ['TECHNICIAN'] },
       { label: 'Phương tiện', path: '/vehicles', roles: ['ADMIN'] },
       { label: 'Nhật ký', path: '/audit-logs', roles: ['ADMIN'] },
     ],
   },
 ];
 
-export default function Sidebar({ collapsed, onToggle }) {
+export default function Sidebar({ collapsed, onNavigate }) {
   const location = useLocation();
   const { user } = useAuth();
   const [openMenus, setOpenMenus] = useState({});
@@ -153,7 +155,7 @@ export default function Sidebar({ collapsed, onToggle }) {
   return (
     <aside className={`sidebar ${collapsed ? 'sidebar--collapsed' : ''}`}>
       {/* Logo section */}
-      <Link to="/" className="sidebar__logo" style={{ textDecoration: 'none', color: 'inherit' }}>
+      <Link to="/" className="sidebar__logo" style={{ textDecoration: 'none', color: 'inherit' }} onClick={onNavigate}>
         <img src={logo} alt="Hung Thinh" className="sidebar__logo-img" />
         {!collapsed && (
           <div className="sidebar__logo-text">
@@ -173,6 +175,7 @@ export default function Sidebar({ collapsed, onToggle }) {
                 key={item.label}
                 to={item.path}
                 end
+                onClick={onNavigate}
                 className={({ isActive }) =>
                   `sidebar__item ${isActive ? 'sidebar__item--active' : ''}`
                 }
@@ -217,6 +220,7 @@ export default function Sidebar({ collapsed, onToggle }) {
                       <NavLink
                         key={child.path}
                         to={child.path}
+                        onClick={onNavigate}
                         className={({ isActive }) =>
                           `sidebar__subitem ${isActive ? 'sidebar__subitem--active' : ''}`
                         }

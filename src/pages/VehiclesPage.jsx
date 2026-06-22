@@ -1,8 +1,10 @@
-import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
+import { createPortal } from 'react-dom';
 import { toast } from 'react-toastify';
 import vehicleService from '../services/vehicleService';
 import apartmentService from '../services/apartmentService';
 import { exportToExcel } from '../utils/exportExcel';
+import DropdownSelect from '../components/common/DropdownSelect';
 
 /* ─── constants ─── */
 const VEHICLE_TYPES = [
@@ -20,50 +22,6 @@ const vehicleTypeColor = {
   BICYCLE: { color: '#059669', bg: '#d1fae5' },
   ELECTRIC_BIKE: { color: '#d97706', bg: '#fef3c7' },
 };
-
-/* ──────────────────────────────────────────────
-   Custom Dropdown Component (replace ugly <select>)
-   ────────────────────────────────────────────── */
-function Dropdown({ label, value, options, onChange, placeholder = 'Chọn...', width = 140 }) {
-  const [open, setOpen] = useState(false);
-  const ref = useRef(null);
-
-  useEffect(() => {
-    const close = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
-    document.addEventListener('mousedown', close);
-    return () => document.removeEventListener('mousedown', close);
-  }, []);
-
-  const selected = options.find(o => String(o.value) === String(value));
-
-  return (
-    <div className="cdd" ref={ref} style={{ minWidth: width }}>
-      {label && <span className="cdd__label">{label}</span>}
-      <button type="button" className={`cdd__trigger ${open ? 'cdd__trigger--open' : ''} ${value ? 'cdd__trigger--active' : ''}`} onClick={() => setOpen(!open)}>
-        <span className="cdd__trigger-text">{selected ? selected.label : placeholder}</span>
-        <svg className="cdd__arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="6 9 12 15 18 9" /></svg>
-      </button>
-      {open && (
-        <div className="cdd__menu">
-          <div className="cdd__option cdd__option--placeholder" onClick={() => { onChange(''); setOpen(false); }}>
-            {placeholder}
-          </div>
-          {options.map(o => (
-            <div key={o.value}
-              className={`cdd__option ${String(o.value) === String(value) ? 'cdd__option--selected' : ''}`}
-              onClick={() => { onChange(o.value); setOpen(false); }}>
-              {o.icon && <span className="cdd__option-icon">{o.icon}</span>}
-              <span>{o.label}</span>
-              {String(o.value) === String(value) && (
-                <svg className="cdd__check" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><polyline points="20 6 9 17 4 12" /></svg>
-              )}
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
 
 /* ─── icons ─── */
 const Icons = {
@@ -113,11 +71,20 @@ export default function VehiclesPage() {
     try {
       const res = await vehicleService.getAll();
       setAllVehicles(res.data?.data || []);
-    } catch (err) { toast.error('Không thể tải danh sách xe'); }
+    } catch { toast.error('Không thể tải danh sách xe'); }
     finally { setLoading(false); }
   }, []);
 
   useEffect(() => { fetchApartments(); fetchVehicles(); }, [fetchApartments, fetchVehicles]);
+
+  useEffect(() => {
+    if (!modalOpen && !deleteModalOpen) return undefined;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [modalOpen, deleteModalOpen]);
 
   /* ─── derived ─── */
   const blocks = useMemo(() => [...new Set(apartments.map(a => a.block).filter(Boolean))].sort(), [apartments]);
@@ -272,15 +239,49 @@ export default function VehiclesPage() {
       {/* Filters */}
       <div className="page__filters">
         <div className="filter-group" style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
-          <Dropdown placeholder="Tất cả tòa" value={filterBlock}
-            options={blocks.map(b => ({ value: b, label: `Block ${b}` }))}
-            onChange={(v) => { setFilterBlock(v); setFilterFloor(''); }} width={130} />
-          <Dropdown placeholder="Tất cả tầng" value={filterFloor}
-            options={floors.map(f => ({ value: String(f), label: `Tầng ${f}` }))}
-            onChange={setFilterFloor} width={130} />
-          <Dropdown placeholder="Tất cả loại xe" value={filterType}
-            options={VEHICLE_TYPES.map(t => ({ value: t.value, label: t.label, icon: t.icon }))}
-            onChange={setFilterType} width={155} />
+          <DropdownSelect
+            value={filterBlock}
+            onChange={(value) => { setFilterBlock(value); setFilterFloor(''); }}
+            style={{ width: 130 }}
+            options={[
+              { value: '', label: 'Tất cả tòa' },
+              ...blocks.map((block) => ({ value: block, label: `Block ${block}` })),
+            ]}
+          />
+          <DropdownSelect
+            value={filterFloor}
+            onChange={setFilterFloor}
+            style={{ width: 130 }}
+            options={[
+              { value: '', label: 'Tất cả tầng' },
+              ...floors.map((floor) => ({ value: String(floor), label: `Tầng ${floor}` })),
+            ]}
+          />
+          <DropdownSelect
+            value={filterType}
+            onChange={setFilterType}
+            style={{ width: 155 }}
+            options={[
+              { value: '', label: 'Tất cả loại xe' },
+              ...VEHICLE_TYPES.map((type) => ({
+                value: type.value,
+                label: type.label,
+                icon: type.icon,
+              })),
+            ]}
+            renderValue={(option) => (
+              <span className="ds-option-inline">
+                {option.icon && <span className="ds-option-icon">{option.icon}</span>}
+                <span className="ds-option-label">{option.label}</span>
+              </span>
+            )}
+            renderOption={(option) => (
+              <span className="ds-option-inline">
+                {option.icon && <span className="ds-option-icon">{option.icon}</span>}
+                <span className="ds-option-label">{option.label}</span>
+              </span>
+            )}
+          />
           {hasFilters && (
             <button className="btn btn--ghost btn--sm" onClick={clearFilters}
               style={{ fontSize: '0.78rem', color: '#ef4444', gap: 4 }}>
@@ -338,8 +339,8 @@ export default function VehiclesPage() {
                     <td>{v.floor ?? '—'}</td>
                     <td>
                       <div className="action-btns">
-                        <button className="action-btn action-btn--edit" title="Sửa" onClick={() => openEditModal(v)}>{Icons.edit}</button>
-                        <button className="action-btn action-btn--delete" title="Xóa"
+                        <button className="action-btn action-btn--edit" data-tooltip="Chỉnh sửa" aria-label="Chỉnh sửa" onClick={() => openEditModal(v)}>{Icons.edit}</button>
+                        <button className="action-btn action-btn--delete" data-tooltip="Xóa" aria-label="Xóa"
                           onClick={() => { setDeleteTarget(v); setDeleteModalOpen(true); }}>{Icons.trash}</button>
                       </div>
                     </td>
@@ -352,9 +353,9 @@ export default function VehiclesPage() {
       </div>
 
       {/* Create / Edit Modal */}
-      {modalOpen && (
-        <div className="modal-overlay" onClick={() => setModalOpen(false)}>
-          <div className="modal" onClick={(e) => e.stopPropagation()}>
+      {modalOpen && createPortal((
+        <div className="modal-overlay vehicle-form-overlay" onClick={() => setModalOpen(false)}>
+          <div className="modal vehicle-form-modal" onClick={(e) => e.stopPropagation()}>
             <div className="modal__header">
               <h3 className="modal__title">{modalMode === 'create' ? 'Thêm xe mới' : 'Chỉnh sửa xe'}</h3>
               <button className="modal__close" onClick={() => setModalOpen(false)}>{Icons.close}</button>
@@ -371,12 +372,11 @@ export default function VehiclesPage() {
                 </div>
                 <div className="form-field">
                   <label className="form-label">Loại xe</label>
-                  <select className="form-select" value={formData.vehicleType}
-                    onChange={(e) => setFormData(p => ({ ...p, vehicleType: e.target.value }))}>
-                    {VEHICLE_TYPES.map((t) => (
-                      <option key={t.value} value={t.value}>{t.icon} {t.label}</option>
-                    ))}
-                  </select>
+                  <DropdownSelect
+                    value={formData.vehicleType}
+                    onChange={(value) => setFormData((prev) => ({ ...prev, vehicleType: value }))}
+                    options={VEHICLE_TYPES.map((type) => ({ value: type.value, label: `${type.icon} ${type.label}` }))}
+                  />
                 </div>
                 <div className="form-field">
                   <label className="form-label">Tên xe</label>
@@ -387,33 +387,52 @@ export default function VehiclesPage() {
                 <div className="form-field">
                   <label className="form-label">Căn hộ <span className="form-required">*</span></label>
                   <div style={{ display: 'flex', gap: '0.4rem', marginBottom: '0.4rem' }}>
-                    <select className="form-select" value={formFilterBlock}
-                      onChange={(e) => { setFormFilterBlock(e.target.value); setFormFilterFloor(''); setFormData(p => ({ ...p, apartmentId: '' })); }}
-                      style={{ flex: 1 }}>
-                      <option value="">Tòa</option>
-                      {[...new Set(apartments.map(a => a.block).filter(Boolean))].sort().map(b => (
-                        <option key={b} value={b}>Block {b}</option>
-                      ))}
-                    </select>
-                    <select className="form-select" value={formFilterFloor}
-                      onChange={(e) => { setFormFilterFloor(e.target.value); setFormData(p => ({ ...p, apartmentId: '' })); }}
-                      style={{ flex: 1 }}>
-                      <option value="">Tầng</option>
-                      {[...new Set(apartments.filter(a => !formFilterBlock || a.block === formFilterBlock).map(a => a.floor).filter(f => f != null))].sort((a, b) => a - b).map(f => (
-                        <option key={f} value={f}>Tầng {f}</option>
-                      ))}
-                    </select>
+                    <DropdownSelect
+                      value={formFilterBlock}
+                      onChange={(value) => {
+                        setFormFilterBlock(value);
+                        setFormFilterFloor('');
+                        setFormData((prev) => ({ ...prev, apartmentId: '' }));
+                      }}
+                      style={{ flex: 1 }}
+                      options={[
+                        { value: '', label: 'Tòa' },
+                        ...[...new Set(apartments.map((apartment) => apartment.block).filter(Boolean))]
+                          .sort()
+                          .map((block) => ({ value: block, label: `Block ${block}` })),
+                      ]}
+                    />
+                    <DropdownSelect
+                      value={formFilterFloor}
+                      onChange={(value) => {
+                        setFormFilterFloor(value);
+                        setFormData((prev) => ({ ...prev, apartmentId: '' }));
+                      }}
+                      style={{ flex: 1 }}
+                      options={[
+                        { value: '', label: 'Tầng' },
+                        ...[...new Set(apartments
+                          .filter((apartment) => !formFilterBlock || apartment.block === formFilterBlock)
+                          .map((apartment) => apartment.floor)
+                          .filter((floor) => floor != null))]
+                          .sort((a, b) => a - b)
+                          .map((floor) => ({ value: floor, label: `Tầng ${floor}` })),
+                      ]}
+                    />
                   </div>
-                  <select className={`form-select ${formErrors.apartmentId ? 'form-input--error' : ''}`}
+                  <DropdownSelect
+                    className={formErrors.apartmentId ? 'form-input--error' : ''}
                     value={formData.apartmentId}
-                    onChange={(e) => setFormData(p => ({ ...p, apartmentId: e.target.value }))}>
-                    <option value="">-- Chọn căn hộ --</option>
-                    {formApartments.map((apt) => (
-                      <option key={apt.id} value={apt.id}>
-                        {apt.apartmentNumber} - Tầng {apt.floor}{apt.block ? ` Block ${apt.block}` : ''}
-                      </option>
-                    ))}
-                  </select>
+                    onChange={(value) => setFormData((prev) => ({ ...prev, apartmentId: value }))}
+                    placeholder="Chọn căn hộ"
+                    options={[
+                      { value: '', label: 'Chọn căn hộ' },
+                      ...formApartments.map((apt) => ({
+                        value: apt.id,
+                        label: `${apt.apartmentNumber} - Tầng ${apt.floor}${apt.block ? ` Block ${apt.block}` : ''}`,
+                      })),
+                    ]}
+                  />
                   {formErrors.apartmentId && <span className="form-error">{formErrors.apartmentId}</span>}
                 </div>
               </div>
@@ -426,12 +445,12 @@ export default function VehiclesPage() {
             </form>
           </div>
         </div>
-      )}
+      ), document.body)}
 
       {/* Delete Modal */}
-      {deleteModalOpen && deleteTarget && (
-        <div className="modal-overlay" onClick={() => setDeleteModalOpen(false)}>
-          <div className="modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '420px' }}>
+      {deleteModalOpen && deleteTarget && createPortal((
+        <div className="modal-overlay vehicle-delete-overlay" onClick={() => setDeleteModalOpen(false)}>
+          <div className="modal vehicle-delete-modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '420px' }}>
             <div className="modal__header">
               <h3 className="modal__title" style={{ color: '#dc2626' }}>Xác nhận xóa</h3>
               <button className="modal__close" onClick={() => setDeleteModalOpen(false)}>{Icons.close}</button>
@@ -451,7 +470,7 @@ export default function VehiclesPage() {
             </div>
           </div>
         </div>
-      )}
+      ), document.body)}
     </div>
   );
 }

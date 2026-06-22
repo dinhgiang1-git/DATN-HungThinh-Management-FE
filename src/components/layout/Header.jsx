@@ -1,14 +1,39 @@
 import { useAuth } from '../../contexts/AuthContext';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { useState, useRef, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { toast } from 'react-toastify';
 import userService from '../../services/userService';
+
+const pageTitles = {
+  '/': 'Tổng quan',
+  '/users': 'Tài khoản',
+  '/residents': 'Cư dân',
+  '/apartments': 'Căn hộ',
+  '/building-reports': 'Khu & tòa nhà',
+  '/devices': 'Thiết bị',
+  '/notifications': 'Thông báo',
+  '/feedbacks': 'Phản hồi',
+  '/invoices': 'Hóa đơn',
+  '/contracts': 'Hợp đồng',
+  '/maintenances': 'Bảo trì',
+  '/vehicles': 'Phương tiện',
+  '/audit-logs': 'Nhật ký hệ thống',
+};
+
+const roleLabel = {
+  ADMIN: 'Quản trị viên',
+  TECHNICIAN: 'Kỹ thuật viên',
+  RESIDENT: 'Cư dân',
+};
 
 export default function Header({ onToggleSidebar }) {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
+  const location = useLocation();
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const dropdownRef = useRef(null);
+  const pageTitle = pageTitles[location.pathname] || 'Hệ thống quản lý';
 
   // Profile modal states
   const [profileModalOpen, setProfileModalOpen] = useState(false);
@@ -26,6 +51,15 @@ export default function Header({ onToggleSidebar }) {
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
+
+  useEffect(() => {
+    if (!profileModalOpen) return undefined;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [profileModalOpen]);
 
   const handleLogout = () => {
     logout();
@@ -60,7 +94,7 @@ export default function Header({ onToggleSidebar }) {
   };
 
   const handleProfileSubmit = async (e) => {
-    e.preventDefault();
+    e?.preventDefault();
     const payload = {};
     if (formData.fullName !== profileData.fullName) payload.fullName = formData.fullName;
     if (formData.phoneNumber !== profileData.phoneNumber) payload.phoneNumber = formData.phoneNumber;
@@ -91,14 +125,17 @@ export default function Header({ onToggleSidebar }) {
   return (
     <header className="header">
       <div className="header__left">
-        <button className="header__toggle" onClick={onToggleSidebar}>
+        <button className="header__toggle" onClick={onToggleSidebar} aria-label="Thu gọn thanh điều hướng">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <line x1="3" y1="12" x2="21" y2="12" />
             <line x1="3" y1="6" x2="21" y2="6" />
             <line x1="3" y1="18" x2="21" y2="18" />
           </svg>
         </button>
-        <h1 className="header__title">HỆ THỐNG QUẢN LÝ CHUNG CƯ</h1>
+        <div className="header__title-block">
+          <span className="header__eyebrow">Hệ thống quản lý chung cư</span>
+          <h1 className="header__title">{pageTitle}</h1>
+        </div>
       </div>
 
       <div className="header__right" ref={dropdownRef}>
@@ -122,12 +159,10 @@ export default function Header({ onToggleSidebar }) {
           <div className="header__dropdown">
             <div className="header__dropdown-info">
               <p className="header__dropdown-name">{user?.username}</p>
-              <p className="header__dropdown-role">{user?.role}</p>
+              <p className="header__dropdown-role">{roleLabel[user?.role] || user?.role}</p>
             </div>
             <div className="header__dropdown-divider" />
-            <button className="header__dropdown-item" onClick={openProfileView} style={{ padding: '0.625rem 1rem', display: 'flex', alignItems: 'center', gap: '0.75rem', width: '100%', background: 'none', border: 'none', cursor: 'pointer', fontSize: '0.875rem', color: '#475569', transition: 'all 0.2s' }}
-                    onMouseOver={(e) => {e.currentTarget.style.backgroundColor='#f1f5f9'; e.currentTarget.style.color='#0f172a'}}
-                    onMouseOut={(e) => {e.currentTarget.style.backgroundColor='transparent'; e.currentTarget.style.color='#475569'}}>
+            <button className="header__dropdown-item header__dropdown-item--profile" onClick={openProfileView}>
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ width: '1.25rem', height: '1.25rem' }}>
                 <circle cx="12" cy="12" r="10" />
                 <line x1="12" y1="16" x2="12" y2="12" />
@@ -135,7 +170,7 @@ export default function Header({ onToggleSidebar }) {
               </svg>
               Thông tin
             </button>
-            <button className="header__dropdown-item" onClick={handleLogout}>
+            <button className="header__dropdown-item header__dropdown-item--logout" onClick={handleLogout}>
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
                 <polyline points="16 17 21 12 16 7" />
@@ -148,7 +183,7 @@ export default function Header({ onToggleSidebar }) {
       </div>
 
       {/* Profile Modal */}
-      {profileModalOpen && (
+      {profileModalOpen && createPortal((
         <div className="modal-overlay" onClick={() => setProfileModalOpen(false)} style={{ zIndex: 9999 }}>
           <div className="modal modal--sm" onClick={(e) => e.stopPropagation()}>
             <div className="modal__header">
@@ -227,7 +262,7 @@ export default function Header({ onToggleSidebar }) {
             </div>
           </div>
         </div>
-      )}
+      ), document.body)}
     </header>
   );
 }

@@ -1,7 +1,16 @@
-import { useState, useEffect, useCallback } from 'react';
+import { Fragment, useState, useEffect, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import { toast } from 'react-toastify';
 import apartmentService from '../services/apartmentService';
 import residentService from '../services/residentService';
+import invoiceService from '../services/invoiceService';
+import meterReadingService from '../services/meterReadingService';
+import feedbackService from '../services/feedbackService';
+import vehicleService from '../services/vehicleService';
+import contractService from '../services/contractService';
+import deviceService from '../services/deviceService';
+import maintenanceService from '../services/maintenanceService';
+import DropdownSelect from '../components/common/DropdownSelect';
 
 /* ─── constants ─── */
 const STATUSES = [
@@ -33,7 +42,107 @@ const relationshipLabel = {
   OTHER: 'Khác',
 };
 
+const relationshipColor = {
+  OWNER: { color: '#7c3aed', bg: '#ede9fe' },
+  SPOUSE: { color: '#db2777', bg: '#fce7f3' },
+  CHILD: { color: '#0891b2', bg: '#cffafe' },
+  PARENT: { color: '#059669', bg: '#d1fae5' },
+  RELATIVE: { color: '#d97706', bg: '#fef3c7' },
+  TENANT: { color: '#2563eb', bg: '#dbeafe' },
+  OTHER: { color: '#6b7280', bg: '#f3f4f6' },
+};
+
 const PAGE_SIZE = 10;
+const REPORT_TABS = [
+  { value: 'overview', label: 'Tổng quan' },
+  { value: 'finance', label: 'Tài chính' },
+  { value: 'utilities', label: 'Điện nước' },
+  { value: 'operations', label: 'Vận hành' },
+];
+
+const invoiceStatusLabel = {
+  PAID: 'Đã thanh toán',
+  UNPAID: 'Chưa thanh toán',
+  OVERDUE: 'Quá hạn',
+};
+
+const paymentMethodLabel = {
+  VNPAY: 'VNPay',
+  MOMO: 'MoMo',
+  CASH: 'Tiền mặt',
+  BANK_TRANSFER: 'Chuyển khoản',
+};
+
+const feedbackStatusLabel = {
+  PENDING: 'Chờ xử lý',
+  IN_PROGRESS: 'Đang xử lý',
+  RESOLVED: 'Đã xử lý',
+  CLOSED: 'Đã đóng',
+};
+
+const contractStatusLabel = {
+  ACTIVE: 'Đang hiệu lực',
+  EXPIRED: 'Hết hạn',
+  TERMINATED: 'Đã chấm dứt',
+  PENDING: 'Chờ hiệu lực',
+};
+
+const deviceStatusLabel = {
+  ACTIVE: 'Hoạt động',
+  INACTIVE: 'Ngưng hoạt động',
+  BROKEN: 'Hỏng',
+  UNDER_MAINTENANCE: 'Đang bảo trì',
+};
+
+const vehicleTypeLabel = {
+  MOTORBIKE: 'Xe máy',
+  CAR: 'Ô tô',
+  BICYCLE: 'Xe đạp',
+  ELECTRIC_BIKE: 'Xe máy điện',
+  ELECTRIC_MOTORBIKE: 'Xe máy điện',
+};
+
+const getApartmentLabel = (apartment) => (
+  `${apartment?.complexName ? `${apartment.complexName} · ` : ''}${apartment?.block ? `${apartment.block}-` : ''}${apartment?.apartmentNumber || '—'}${apartment?.floor != null ? ` · Tầng ${apartment.floor}` : ''}`
+);
+const unwrapPageContent = (response) => response?.data?.data?.content || response?.data?.data || [];
+const toNumber = (value) => Number(value || 0);
+const formatCurrency = (value) => `${Math.round(toNumber(value)).toLocaleString('vi-VN')} đ`;
+const formatNumber = (value) => toNumber(value).toLocaleString('vi-VN');
+const formatMeasure = (value, unit) => (value == null || value === '' ? '—' : `${formatNumber(value)} ${unit}`);
+const formatDate = (value) => {
+  if (!value) return '—';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value);
+  return date.toLocaleDateString('vi-VN');
+};
+const sumBy = (items, selector) => items.reduce((sum, item) => sum + toNumber(selector(item)), 0);
+const getInvoicePaidAmount = (invoice) => {
+  const paymentTotal = sumBy((invoice?.payments || []).filter((payment) => payment.paymentStatus === 'SUCCESS'), (payment) => payment.amount);
+  if (paymentTotal > 0) return paymentTotal;
+  return invoice?.invoiceStatus === 'PAID' ? toNumber(invoice.totalAmount) : 0;
+};
+const getInvoiceDueDate = (invoice) => invoice?.dueDate ?? invoice?.DueDate;
+const getSuccessfulPayments = (invoice) => (invoice?.payments || [])
+  .filter((payment) => payment.paymentStatus === 'SUCCESS')
+  .sort((a, b) => new Date(b.paymentDateTime || 0) - new Date(a.paymentDateTime || 0));
+const getLatestSuccessfulPayment = (invoice) => getSuccessfulPayments(invoice)[0];
+const getPaymentMethodText = (payment) => paymentMethodLabel[payment?.paymentMethod] || payment?.paymentMethod || '—';
+const getApartmentIdFromNested = (item) => item?.apartment?.id ?? item?.apartment?.apartmentId ?? item?.apartmentId;
+const getResidentId = (resident) => resident?.residentId ?? resident?.id;
+const getResidentUsername = (resident) => resident?.userName ?? resident?.username ?? resident?.loginName;
+const getResidentPhone = (resident) => resident?.phoneNumber ?? resident?.phone;
+const getResidentRelationship = (resident) => resident?.relationshipType ?? resident?.relationship;
+const getResidentInitial = (resident) => (resident?.fullName || getResidentUsername(resident) || '?').trim().charAt(0).toUpperCase();
+const getRelationshipHint = (relationship, ownerName) => {
+  if (relationship === 'OWNER') return 'Chủ hộ căn hộ';
+  if (relationship === 'TENANT') return 'Người thuê trong căn hộ';
+  if (relationship === 'SPOUSE') return `Vợ/chồng của ${ownerName || 'chủ hộ'}`;
+  if (relationship === 'CHILD') return `Con của ${ownerName || 'chủ hộ'}`;
+  if (relationship === 'PARENT') return `Cha/mẹ của ${ownerName || 'chủ hộ'}`;
+  if (relationship === 'RELATIVE') return `Người thân của ${ownerName || 'chủ hộ'}`;
+  return 'Cư dân trong căn hộ';
+};
 
 /* ─── icons ─── */
 const Icons = {
@@ -64,6 +173,11 @@ const Icons = {
   chevronRight: (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="9 6 15 12 9 18" /></svg>
   ),
+  chevronDown: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+      <path d="m6 9 6 6 6-6" />
+    </svg>
+  ),
   close: (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
       <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
@@ -84,6 +198,33 @@ const Icons = {
       <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="7 10 12 15 17 10" /><line x1="12" y1="15" x2="12" y2="3" />
     </svg>
   ),
+  report: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+      <path d="M4 19V5" /><path d="M4 19h16" /><rect x="7" y="11" width="3" height="5" rx="1" />
+      <rect x="12" y="7" width="3" height="9" rx="1" /><rect x="17" y="9" width="3" height="7" rx="1" />
+    </svg>
+  ),
+  users: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+      <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" />
+      <path d="M23 21v-2a4 4 0 0 0-3-3.87" /><path d="M16 3.13a4 4 0 0 1 0 7.75" />
+    </svg>
+  ),
+  user: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+      <path d="M20 21a8 8 0 0 0-16 0" /><circle cx="12" cy="7" r="4" />
+    </svg>
+  ),
+  phone: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+      <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6A19.79 19.79 0 0 1 2.08 4.18 2 2 0 0 1 4.06 2h3a2 2 0 0 1 2 1.72c.12.9.32 1.77.6 2.6a2 2 0 0 1-.45 2.11L8 9.64a16 16 0 0 0 6.36 6.36l1.21-1.21a2 2 0 0 1 2.11-.45c.83.28 1.7.48 2.6.6A2 2 0 0 1 22 16.92z" />
+    </svg>
+  ),
+  mail: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+      <rect x="3" y="5" width="18" height="14" rx="2" /><path d="m3 7 9 6 9-6" />
+    </svg>
+  ),
 };
 
 export default function ApartmentsPage() {
@@ -94,20 +235,23 @@ export default function ApartmentsPage() {
   const [totalPages, setTotalPages] = useState(0);
   const [totalElements, setTotalElements] = useState(0);
   const [filterStatus, setFilterStatus] = useState('');
+  const [filterComplexName, setFilterComplexName] = useState('');
   const [filterBlock, setFilterBlock] = useState('');
   const [filterFloor, setFilterFloor] = useState('');
-  const [blockDropOpen, setBlockDropOpen] = useState(false);
-  const [floorDropOpen, setFloorDropOpen] = useState(false);
-
-  // Close dropdowns on outside click
-  useEffect(() => {
-    const handleClick = () => { setBlockDropOpen(false); setFloorDropOpen(false); };
-    document.addEventListener('click', handleClick);
-    return () => document.removeEventListener('click', handleClick);
-  }, []);
   const [sortDirection, setSortDirection] = useState('asc');
   const [searchInput, setSearchInput] = useState('');
   const [searchKeyword, setSearchKeyword] = useState('');
+  const [expandedApartments, setExpandedApartments] = useState({});
+  const [residentTooltip, setResidentTooltip] = useState({
+    visible: false,
+    x: 0,
+    y: 0,
+    title: '',
+    relationship: '',
+    phone: '',
+    email: '',
+    context: '',
+  });
 
   // Debounce search
   useEffect(() => {
@@ -125,6 +269,7 @@ export default function ApartmentsPage() {
   const [modalMode, setModalMode] = useState('create');
   const [selectedApartment, setSelectedApartment] = useState(null);
   const [formData, setFormData] = useState({
+    complexName: 'Hưng Thịnh',
     apartmentNumber: '',
     block: '',
     floor: '',
@@ -137,6 +282,20 @@ export default function ApartmentsPage() {
   const [submitting, setSubmitting] = useState(false);
   const [residentSearchKeyword, setResidentSearchKeyword] = useState('');
   const [residentFilterTab, setResidentFilterTab] = useState('owner');
+  const [reportModalOpen, setReportModalOpen] = useState(false);
+  const [reportApartment, setReportApartment] = useState(null);
+  const [reportTab, setReportTab] = useState('overview');
+  const [reportLoading, setReportLoading] = useState(false);
+  const [reportError, setReportError] = useState('');
+  const [reportData, setReportData] = useState({
+    invoices: [],
+    meterReadings: [],
+    feedbacks: [],
+    vehicles: [],
+    contracts: [],
+    devices: [],
+    maintenances: [],
+  });
 
   // Available owners & residents (without apartment)
   const [availableOwners, setAvailableOwners] = useState([]);
@@ -146,6 +305,15 @@ export default function ApartmentsPage() {
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [deleting, setDeleting] = useState(false);
+
+  useEffect(() => {
+    if (!modalOpen && !reportModalOpen && !deleteModalOpen) return undefined;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [modalOpen, reportModalOpen, deleteModalOpen]);
 
   /* ─── fetch ─── */
   const fetchApartments = useCallback(async () => {
@@ -158,6 +326,7 @@ export default function ApartmentsPage() {
         direction: sortDirection,
       };
       if (filterStatus) params.apartmentStatus = filterStatus;
+      if (filterComplexName) params.complexName = filterComplexName;
       if (filterBlock) params.block = filterBlock;
       if (filterFloor) params.floor = Number(filterFloor);
       if (searchKeyword.trim()) params.keyword = searchKeyword.trim();
@@ -173,9 +342,10 @@ export default function ApartmentsPage() {
     } finally {
       setLoading(false);
     }
-  }, [page, filterStatus, filterBlock, filterFloor, sortDirection, searchKeyword]);
+  }, [page, filterStatus, filterComplexName, filterBlock, filterFloor, sortDirection, searchKeyword]);
 
   // Dynamic filter options (fetched from all apartments)
+  const [allComplexNames, setAllComplexNames] = useState([]);
   const [allBlocks, setAllBlocks] = useState([]);
   const [allFloors, setAllFloors] = useState([]);
 
@@ -184,8 +354,10 @@ export default function ApartmentsPage() {
       try {
         const res = await apartmentService.getAll({ page: 0, size: 999 });
         const all = res.data?.data?.content || [];
+        const complexes = [...new Set(all.map((a) => a.complexName || 'Hưng Thịnh').filter(Boolean))].sort();
         const blocks = [...new Set(all.map((a) => a.block).filter(Boolean))].sort();
         const floors = [...new Set(all.map((a) => a.floor).filter((f) => f != null))].sort((a, b) => a - b);
+        setAllComplexNames(complexes);
         setAllBlocks(blocks);
         setAllFloors(floors);
       } catch { /* ignore */ }
@@ -254,10 +426,53 @@ export default function ApartmentsPage() {
     setPage(0);
   };
 
+  const toggleApartmentResidents = (apartmentId) => {
+    setExpandedApartments((prev) => ({
+      ...prev,
+      [apartmentId]: !prev[apartmentId],
+    }));
+  };
+
+  const getTooltipPosition = (event) => {
+    const offset = 14;
+    const width = 280;
+    const height = 132;
+    const nextX = event.clientX + offset + width > window.innerWidth
+      ? event.clientX - width - offset
+      : event.clientX + offset;
+    const nextY = event.clientY + offset + height > window.innerHeight
+      ? event.clientY - height - offset
+      : event.clientY + offset;
+
+    return {
+      x: Math.max(12, nextX),
+      y: Math.max(12, nextY),
+    };
+  };
+
+  const showResidentTooltip = (event, payload) => {
+    setResidentTooltip({
+      visible: true,
+      ...getTooltipPosition(event),
+      ...payload,
+    });
+  };
+
+  const moveResidentTooltip = (event) => {
+    setResidentTooltip((prev) => (
+      prev.visible ? { ...prev, ...getTooltipPosition(event) } : prev
+    ));
+  };
+
+  const hideResidentTooltip = () => {
+    setResidentTooltip((prev) => ({ ...prev, visible: false }));
+  };
+
   const openCreateModal = () => {
     setModalMode('create');
     setSelectedApartment(null);
     setFormData({
+      complexName: filterComplexName || 'Hưng Thịnh',
       apartmentNumber: '',
       block: '',
       floor: '',
@@ -286,6 +501,7 @@ export default function ApartmentsPage() {
       .filter((id) => id != null && id !== apt.ownerId && id !== (tenantResident?.id));
 
     setFormData({
+      complexName: apt.complexName || 'Hưng Thịnh',
       apartmentNumber: apt.apartmentNumber || '',
       block: apt.block || '',
       floor: apt.floor ?? '',
@@ -309,13 +525,55 @@ export default function ApartmentsPage() {
     setModalOpen(true);
   };
 
+  const openReportModal = async (apt) => {
+    setReportApartment(apt);
+    setReportTab('overview');
+    setReportError('');
+    setReportModalOpen(true);
+    setReportLoading(true);
+
+    const apartmentId = apt.id;
+    const requests = await Promise.allSettled([
+      apartmentService.getById(apartmentId),
+      invoiceService.getAll({ page: 0, size: 1000, sortBy: 'id', direction: 'desc', apartmentId }),
+      meterReadingService.getAll({ page: 0, size: 1000, apartmentId }),
+      feedbackService.getAll({ page: 0, size: 1000, sortBy: 'id', direction: 'desc', apartmentId }),
+      vehicleService.getByApartment(apartmentId),
+      contractService.getByApartment(apartmentId, { page: 0, size: 100, sortBy: 'id', direction: 'desc' }),
+      deviceService.getAll({ page: 0, size: 1000, apartmentId }),
+      maintenanceService.getAll({ page: 0, size: 1000, sortBy: 'id', direction: 'desc' }),
+    ]);
+
+    const valueAt = (index) => requests[index].status === 'fulfilled' ? requests[index].value : null;
+    const failedCount = requests.filter((item) => item.status === 'rejected').length;
+    const maintenances = unwrapPageContent(valueAt(7))
+      .filter((item) => String(getApartmentIdFromNested(item)) === String(apartmentId));
+
+    setReportApartment(valueAt(0)?.data?.data || apt);
+    setReportData({
+      invoices: unwrapPageContent(valueAt(1)),
+      meterReadings: unwrapPageContent(valueAt(2)),
+      feedbacks: unwrapPageContent(valueAt(3)),
+      vehicles: unwrapPageContent(valueAt(4)),
+      contracts: unwrapPageContent(valueAt(5)),
+      devices: unwrapPageContent(valueAt(6)),
+      maintenances,
+    });
+    setReportError(failedCount ? `Có ${failedCount} nhóm dữ liệu chưa tải được. Báo cáo vẫn hiển thị phần còn lại.` : '');
+    setReportLoading(false);
+  };
+
   const openDeleteModal = (apt) => {
     setDeleteTarget(apt);
     setDeleteModalOpen(true);
   };
 
   const handleFormChange = (field, value) => {
-    setFormData((prev) => ({ ...prev, [field]: value }));
+    setFormData((prev) => ({
+      ...prev,
+      [field]: value,
+      ...(field === 'ownerId' && value ? { apartmentStatus: 'OCCUPIED' } : {}),
+    }));
     if (formErrors[field]) setFormErrors((prev) => ({ ...prev, [field]: '' }));
   };
 
@@ -330,6 +588,7 @@ export default function ApartmentsPage() {
 
   const validateForm = () => {
     const errors = {};
+    if (!formData.complexName.trim()) errors.complexName = 'Vui lòng nhập khu chung cư';
     if (!formData.apartmentNumber.trim()) errors.apartmentNumber = 'Vui lòng nhập số căn hộ';
     if (formData.floor === '' || formData.floor === null) errors.floor = 'Vui lòng nhập tầng';
     if (formData.area === '' || formData.area === null) errors.area = 'Vui lòng nhập diện tích';
@@ -353,6 +612,7 @@ export default function ApartmentsPage() {
       ];
 
       const payload = {
+        complexName: formData.complexName || 'Hưng Thịnh',
         apartmentNumber: formData.apartmentNumber,
         block: formData.block || undefined,
         floor: Number(formData.floor),
@@ -435,57 +695,41 @@ export default function ApartmentsPage() {
             ))}
           </div>
         </div>
-        <div className="filter-group" style={{ position: 'relative' }}>
-          <label className="filter-label">Tòa:</label>
-          <button
-            className={`filter-tab ${filterBlock ? 'filter-tab--active' : ''}`}
-            onClick={(e) => { e.stopPropagation(); setBlockDropOpen(!blockDropOpen); setFloorDropOpen(false); }}
-            style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}
-          >
-            {filterBlock || 'Tất cả'}
-            <svg style={{ width: 12, height: 12, transform: blockDropOpen ? 'rotate(180deg)' : '', transition: 'transform 0.2s' }} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="6 9 12 15 18 9" /></svg>
-          </button>
-          {blockDropOpen && (
-            <div className="filter-dropdown" onClick={(e) => e.stopPropagation()}>
-              <div
-                className={`filter-dropdown__item ${filterBlock === '' ? 'filter-dropdown__item--active' : ''}`}
-                onClick={() => { setFilterBlock(''); setPage(0); setBlockDropOpen(false); }}
-              >Tất cả</div>
-              {allBlocks.map((b) => (
-                <div
-                  key={b}
-                  className={`filter-dropdown__item ${filterBlock === b ? 'filter-dropdown__item--active' : ''}`}
-                  onClick={() => { setFilterBlock(b); setPage(0); setBlockDropOpen(false); }}
-                >Tòa {b}</div>
-              ))}
-            </div>
-          )}
+        <div className="filter-group">
+          <label className="filter-label">Khu:</label>
+          <DropdownSelect
+            value={filterComplexName}
+            onChange={(value) => { setFilterComplexName(value); setPage(0); }}
+            style={{ width: 140 }}
+            options={[
+              { value: '', label: 'Tất cả khu' },
+              ...allComplexNames.map((name) => ({ value: name, label: name })),
+            ]}
+          />
         </div>
-        <div className="filter-group" style={{ position: 'relative' }}>
+        <div className="filter-group">
+          <label className="filter-label">Tòa:</label>
+          <DropdownSelect
+            value={filterBlock}
+            onChange={(value) => { setFilterBlock(value); setPage(0); }}
+            style={{ width: 130 }}
+            options={[
+              { value: '', label: 'Tất cả tòa' },
+              ...allBlocks.map((block) => ({ value: block, label: `Tòa ${block}` })),
+            ]}
+          />
+        </div>
+        <div className="filter-group">
           <label className="filter-label">Tầng:</label>
-          <button
-            className={`filter-tab ${filterFloor ? 'filter-tab--active' : ''}`}
-            onClick={(e) => { e.stopPropagation(); setFloorDropOpen(!floorDropOpen); setBlockDropOpen(false); }}
-            style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}
-          >
-            {filterFloor ? `Tầng ${filterFloor}` : 'Tất cả'}
-            <svg style={{ width: 12, height: 12, transform: floorDropOpen ? 'rotate(180deg)' : '', transition: 'transform 0.2s' }} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="6 9 12 15 18 9" /></svg>
-          </button>
-          {floorDropOpen && (
-            <div className="filter-dropdown" onClick={(e) => e.stopPropagation()}>
-              <div
-                className={`filter-dropdown__item ${filterFloor === '' ? 'filter-dropdown__item--active' : ''}`}
-                onClick={() => { setFilterFloor(''); setPage(0); setFloorDropOpen(false); }}
-              >Tất cả</div>
-              {allFloors.map((f) => (
-                <div
-                  key={f}
-                  className={`filter-dropdown__item ${filterFloor === String(f) ? 'filter-dropdown__item--active' : ''}`}
-                  onClick={() => { setFilterFloor(String(f)); setPage(0); setFloorDropOpen(false); }}
-                >Tầng {f}</div>
-              ))}
-            </div>
-          )}
+          <DropdownSelect
+            value={filterFloor}
+            onChange={(value) => { setFilterFloor(value); setPage(0); }}
+            style={{ width: 130 }}
+            options={[
+              { value: '', label: 'Tất cả tầng' },
+              ...allFloors.map((floor) => ({ value: String(floor), label: `Tầng ${floor}` })),
+            ]}
+          />
         </div>
         <div className="filter-actions">
           <div className="search-box">
@@ -523,8 +767,9 @@ export default function ApartmentsPage() {
             <thead>
               <tr>
                 <th className="data-table__th--id">ID</th>
+                <th>Khu</th>
                 <th>Số căn hộ</th>
-                <th>Block</th>
+                <th>Tòa</th>
                 <th>Tầng</th>
                 <th>Diện tích (m²)</th>
                 <th>Chủ hộ</th>
@@ -535,42 +780,116 @@ export default function ApartmentsPage() {
             <tbody>
               {apartments.map((apt) => {
                 const sc = statusColor[apt.apartmentStatus] || { color: '#6b7280', bg: '#f3f4f6' };
+                const residents = apt.residents || [];
+                const owner = apt.ownerId && residents
+                  ? residents.find((r) => String(getResidentId(r)) === String(apt.ownerId))
+                  : residents.find((r) => getResidentRelationship(r) === 'OWNER');
+                const hasResidents = residents.length > 0;
+                const isExpanded = !!expandedApartments[apt.id];
                 return (
-                  <tr key={apt.id}>
-                    <td className="data-table__cell--id">{apt.id}</td>
-                    <td className="data-table__cell--bold">{apt.apartmentNumber}</td>
-                    <td>{apt.block || '—'}</td>
-                    <td>{apt.floor ?? '—'}</td>
-                    <td>{apt.area ? `${apt.area} m²` : '—'}</td>
-                    <td>
-                      {(() => {
-                        const owner = apt.ownerId && apt.residents
-                          ? apt.residents.find((r) => r.residentId === apt.ownerId)
-                          : null;
-                        return owner
+                  <Fragment key={apt.id}>
+                    <tr
+                      className={`apartment-row ${isExpanded ? 'apartment-row--expanded' : ''} ${hasResidents ? 'apartment-row--clickable' : ''}`}
+                      onClick={() => hasResidents && toggleApartmentResidents(apt.id)}
+                    >
+                      <td className="data-table__cell--id">{apt.id}</td>
+                      <td>{apt.complexName || 'Hưng Thịnh'}</td>
+                      <td className="data-table__cell--bold">
+                        <div className="apartment-number-cell">
+                          <div className="apartment-number-cell__info">
+                            <span className="apartment-number-cell__main">{apt.apartmentNumber}</span>
+                            {hasResidents && (
+                              <span className="apartment-number-cell__count">
+                                {residents.length} cư dân
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      </td>
+                      <td>{apt.block || '—'}</td>
+                      <td>{apt.floor ?? '—'}</td>
+                      <td>{apt.area ? `${apt.area} m²` : '—'}</td>
+                      <td>
+                        {owner
                           ? <span className="resident-chip">{owner.fullName}</span>
-                          : <span className="text-muted">Chưa có</span>;
-                      })()}
-                    </td>
-                    <td>
-                      <span className="badge" style={{ color: sc.color, backgroundColor: sc.bg }}>
-                        {statusLabel[apt.apartmentStatus] || apt.apartmentStatus}
-                      </span>
-                    </td>
-                    <td>
-                      <div className="action-btns">
-                        <button className="action-btn action-btn--view" title="Xem" onClick={() => openViewModal(apt)}>
-                          {Icons.eye}
-                        </button>
-                        <button className="action-btn action-btn--edit" title="Sửa" onClick={() => openEditModal(apt)}>
-                          {Icons.edit}
-                        </button>
-                        <button className="action-btn action-btn--delete" title="Xóa" onClick={() => openDeleteModal(apt)}>
-                          {Icons.trash}
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
+                          : <span className="text-muted">Chưa có</span>}
+                      </td>
+                      <td>
+                        <span className="badge" style={{ color: sc.color, backgroundColor: sc.bg }}>
+                          {statusLabel[apt.apartmentStatus] || apt.apartmentStatus}
+                        </span>
+                      </td>
+                      <td>
+                        <div className="action-btns">
+                          <button className="action-btn action-btn--view" data-tooltip="Xem chi tiết" onClick={(e) => { e.stopPropagation(); openViewModal(apt); }}>
+                            {Icons.eye}
+                          </button>
+                          <button className="action-btn action-btn--report" data-tooltip="Báo cáo" onClick={(e) => { e.stopPropagation(); openReportModal(apt); }}>
+                            {Icons.report}
+                          </button>
+                          <button className="action-btn action-btn--edit" data-tooltip="Chỉnh sửa" onClick={(e) => { e.stopPropagation(); openEditModal(apt); }}>
+                            {Icons.edit}
+                          </button>
+                          <button className="action-btn action-btn--delete" data-tooltip="Xóa" onClick={(e) => { e.stopPropagation(); openDeleteModal(apt); }}>
+                            {Icons.trash}
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                    {hasResidents && (
+                      <tr
+                        className={`apartment-residents-row ${isExpanded ? 'apartment-residents-row--open' : 'apartment-residents-row--closed'}`}
+                        aria-hidden={!isExpanded}
+                      >
+                        <td colSpan="9">
+                          <div className="apartment-residents-collapse">
+                            <div className="apartment-residents-collapse__inner">
+                              <div className="resident-hh-inline">
+                                <span className="resident-hh-inline__label">
+                                  {Icons.users}
+                                  Thành viên trong hộ:
+                                </span>
+                                <div className="resident-hh-inline__list">
+                                  {residents.map((resident) => {
+                                    const relationship = getResidentRelationship(resident);
+                                    const rc = relationshipColor[relationship] || relationshipColor.OTHER;
+                                    const username = getResidentUsername(resident);
+                                    const phone = getResidentPhone(resident);
+                                    const residentName = resident.fullName || username || '—';
+                                    const relationshipHint = getRelationshipHint(relationship, owner?.fullName);
+                                    return (
+                                      <div
+                                        key={getResidentId(resident)}
+                                        className="resident-hh-chip"
+                                        style={{ '--chip-accent': rc.color, '--chip-bg': rc.bg }}
+                                        onMouseEnter={(e) => showResidentTooltip(e, {
+                                          title: residentName,
+                                          relationship: relationshipLabel[relationship] || relationship || '—',
+                                          phone: phone || 'Chưa có SĐT',
+                                          email: resident.email || 'Chưa có email',
+                                          context: relationshipHint,
+                                        })}
+                                        onMouseMove={moveResidentTooltip}
+                                        onMouseLeave={hideResidentTooltip}
+                                      >
+                                        <span className="resident-hh-chip__avatar" style={{ background: rc.bg, color: rc.color }}>
+                                          {getResidentInitial(resident)}
+                                        </span>
+                                        <span className="resident-hh-chip__name">{residentName}</span>
+                                        <span className="resident-hh-chip__role" style={{ color: rc.color, background: rc.bg }}>
+                                          {relationshipLabel[relationship] || relationship || '—'}
+                                        </span>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
                 );
               })}
             </tbody>
@@ -618,9 +937,9 @@ export default function ApartmentsPage() {
       )}
 
       {/* Create / Edit Modal */}
-      {modalOpen && (modalMode === 'create' || modalMode === 'edit') && (
-        <div className="modal-overlay" onClick={() => setModalOpen(false)}>
-          <div className="modal" onClick={(e) => e.stopPropagation()}>
+      {modalOpen && (modalMode === 'create' || modalMode === 'edit') && createPortal((
+        <div className="modal-overlay apartment-form-overlay" onClick={() => setModalOpen(false)}>
+          <div className="modal apartment-form-modal" onClick={(e) => e.stopPropagation()}>
             <div className="modal__header">
               <h3 className="modal__title">
                 {modalMode === 'create' ? 'Thêm căn hộ mới' : 'Chỉnh sửa căn hộ'}
@@ -631,6 +950,19 @@ export default function ApartmentsPage() {
             </div>
             <form onSubmit={handleSubmit} className="modal__body">
               <div className="form-grid">
+                <div className="form-field">
+                  <label className="form-label">
+                    Khu chung cư <span className="form-required">*</span>
+                  </label>
+                  <input
+                    className={`form-input ${formErrors.complexName ? 'form-input--error' : ''}`}
+                    value={formData.complexName}
+                    onChange={(e) => handleFormChange('complexName', e.target.value)}
+                    placeholder="VD: Hưng Thịnh, Hưng Thịnh Riverside..."
+                  />
+                  {formErrors.complexName && <span className="form-error">{formErrors.complexName}</span>}
+                </div>
+
                 {/* Apartment Number */}
                 <div className="form-field">
                   <label className="form-label">
@@ -645,9 +977,8 @@ export default function ApartmentsPage() {
                   {formErrors.apartmentNumber && <span className="form-error">{formErrors.apartmentNumber}</span>}
                 </div>
 
-                {/* Block */}
                 <div className="form-field">
-                  <label className="form-label">Block</label>
+                  <label className="form-label">Tòa / Block</label>
                   <input
                     className="form-input"
                     value={formData.block}
@@ -694,15 +1025,16 @@ export default function ApartmentsPage() {
                   <label className="form-label">
                     Trạng thái <span className="form-required">*</span>
                   </label>
-                  <select
-                    className={`form-select ${formErrors.apartmentStatus ? 'form-input--error' : ''}`}
+                  <DropdownSelect
+                    className={formErrors.apartmentStatus ? 'form-input--error' : ''}
                     value={formData.apartmentStatus}
-                    onChange={(e) => handleFormChange('apartmentStatus', e.target.value)}
-                  >
-                    <option value="VACANT">Trống</option>
-                    <option value="OCCUPIED">Đang ở</option>
-                    <option value="UNDER_MAINTENANCE">Đang bảo trì</option>
-                  </select>
+                    onChange={(value) => handleFormChange('apartmentStatus', value)}
+                    options={[
+                      { value: 'VACANT', label: 'Trống' },
+                      { value: 'OCCUPIED', label: 'Đang ở' },
+                      { value: 'UNDER_MAINTENANCE', label: 'Đang bảo trì' },
+                    ]}
+                  />
                   {formErrors.apartmentStatus && <span className="form-error">{formErrors.apartmentStatus}</span>}
                 </div>
               </div>
@@ -910,12 +1242,12 @@ export default function ApartmentsPage() {
             </form>
           </div>
         </div>
-      )}
+      ), document.body)}
 
       {/* View Modal */}
-      {modalOpen && modalMode === 'view' && selectedApartment && (
-        <div className="modal-overlay" onClick={() => setModalOpen(false)}>
-          <div className="modal" onClick={(e) => e.stopPropagation()}>
+      {modalOpen && modalMode === 'view' && selectedApartment && createPortal((
+        <div className="modal-overlay apartment-detail-overlay" onClick={() => setModalOpen(false)}>
+          <div className="modal apartment-detail-modal" onClick={(e) => e.stopPropagation()}>
             <div className="modal__header">
               <h3 className="modal__title">Chi tiết căn hộ</h3>
               <button className="modal__close" onClick={() => setModalOpen(false)}>
@@ -930,11 +1262,15 @@ export default function ApartmentsPage() {
                   <span className="detail-value">{selectedApartment.id}</span>
                 </div>
                 <div className="detail-item">
+                  <span className="detail-label">Khu chung cư</span>
+                  <span className="detail-value">{selectedApartment.complexName || 'Hưng Thịnh'}</span>
+                </div>
+                <div className="detail-item">
                   <span className="detail-label">Số căn hộ</span>
                   <span className="detail-value detail-value--bold">{selectedApartment.apartmentNumber}</span>
                 </div>
                 <div className="detail-item">
-                  <span className="detail-label">Block</span>
+                  <span className="detail-label">Tòa / Block</span>
                   <span className="detail-value">{selectedApartment.block || '—'}</span>
                 </div>
                 <div className="detail-item">
@@ -1071,7 +1407,6 @@ export default function ApartmentsPage() {
                   };
                   const handleDownloadContract = async (contract) => {
                     try {
-                      const contractService = (await import('../services/contractService')).default;
                       const res = await contractService.download(contract.contractId);
                       const url = window.URL.createObjectURL(new Blob([res.data]));
                       const link = document.createElement('a');
@@ -1154,12 +1489,434 @@ export default function ApartmentsPage() {
             </div>
           </div>
         </div>
+      ), document.body)}
+
+      {residentTooltip.visible && (
+        <div
+          className="apartment-resident-tooltip"
+          style={{ left: residentTooltip.x, top: residentTooltip.y }}
+        >
+          <strong>{residentTooltip.title}</strong>
+          <span>{residentTooltip.relationship}</span>
+          <small>{residentTooltip.context}</small>
+          <div className="apartment-resident-tooltip__meta">
+            <span>{residentTooltip.phone}</span>
+            <span>{residentTooltip.email}</span>
+          </div>
+        </div>
       )}
 
+      {reportModalOpen && reportApartment && createPortal((
+        <div className="modal-overlay apt-report-overlay" onClick={() => setReportModalOpen(false)}>
+          <div className="modal apt-report-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="modal__header apt-report-modal__header">
+              <div>
+                <h3 className="modal__title">Báo cáo căn hộ {reportApartment.apartmentNumber}</h3>
+                <p className="apt-report-modal__subtitle">
+                  {getApartmentLabel(reportApartment)} · {statusLabel[reportApartment.apartmentStatus] || reportApartment.apartmentStatus || '—'}
+                </p>
+              </div>
+              <button className="modal__close" onClick={() => setReportModalOpen(false)}>
+                {Icons.close}
+              </button>
+            </div>
+
+            <div className="apt-report-modal__tabs">
+              {REPORT_TABS.map((tab) => (
+                <button
+                  key={tab.value}
+                  className={`apt-report-tab ${reportTab === tab.value ? 'apt-report-tab--active' : ''}`}
+                  onClick={() => setReportTab(tab.value)}
+                  type="button"
+                >
+                  {tab.label}
+                </button>
+              ))}
+            </div>
+
+            <div className="modal__body apt-report-modal__body">
+              {reportLoading ? (
+                <div className="apt-report-loading">
+                  <div className="spinner" />
+                  <span>Đang tổng hợp báo cáo...</span>
+                </div>
+              ) : (() => {
+                const residents = reportApartment.residents || [];
+                const owner = reportApartment.ownerId
+                  ? residents.find((item) => String(getResidentId(item)) === String(reportApartment.ownerId))
+                  : residents.find((item) => getResidentRelationship(item) === 'OWNER');
+                const tenant = residents.find((item) => getResidentRelationship(item) === 'TENANT');
+                const householdResidents = residents.filter((item) => getResidentRelationship(item) !== 'TENANT');
+                const invoices = reportData.invoices || [];
+                const meterReadings = reportData.meterReadings || [];
+                const feedbacks = reportData.feedbacks || [];
+                const vehicles = reportData.vehicles || [];
+                const contracts = reportData.contracts || [];
+                const devices = reportData.devices || [];
+                const maintenances = reportData.maintenances || [];
+                const paidAmount = sumBy(invoices, getInvoicePaidAmount);
+                const totalAmount = sumBy(invoices, (invoice) => invoice.totalAmount);
+                const unpaidAmount = Math.max(0, totalAmount - paidAmount);
+                const unpaidInvoices = invoices.filter((invoice) => invoice.invoiceStatus !== 'PAID');
+                const paidInvoices = invoices.filter((invoice) => invoice.invoiceStatus === 'PAID');
+                const latestInvoice = invoices[0];
+                const sortedMeterReadings = [...meterReadings].sort((a, b) => String(b.billingPeriod || '').localeCompare(String(a.billingPeriod || '')));
+                const latestReading = sortedMeterReadings[0];
+                const electricReadings = sortedMeterReadings.filter((reading) => reading.electricCurrentReading != null || reading.electricQuantity != null);
+                const waterReadings = sortedMeterReadings.filter((reading) => reading.waterCurrentReading != null || reading.waterQuantity != null);
+                const electricUsage = sumBy(invoices, (invoice) => invoice.electricQuantity);
+                const waterUsage = sumBy(invoices, (invoice) => invoice.waterQuantity);
+                const electricFee = sumBy(invoices, (invoice) => invoice.electricFee);
+                const waterFee = sumBy(invoices, (invoice) => invoice.waterFee);
+                const managementFee = sumBy(invoices, (invoice) => invoice.managementFee);
+                const parkingFee = sumBy(invoices, (invoice) => invoice.parkingFee);
+                const activeContracts = contracts.filter((contract) => contract.contractStatus === 'ACTIVE');
+                const openFeedbacks = feedbacks.filter((item) => item.feedbackStatus === 'PENDING' || item.feedbackStatus === 'IN_PROGRESS');
+                const riskyDevices = devices.filter((item) => item.deviceStatus === 'BROKEN' || item.deviceStatus === 'UNDER_MAINTENANCE');
+                const maintenanceCost = sumBy(maintenances, (item) => item.cost);
+                const riskLabel = unpaidAmount > 0
+                  ? `${unpaidInvoices.length} hóa đơn chưa thanh toán`
+                  : openFeedbacks.length > 0
+                    ? `${openFeedbacks.length} phản ánh đang xử lý`
+                    : 'Ổn định';
+
+                return (
+                  <>
+                    {reportError && <div className="apt-report-warning">{reportError}</div>}
+
+                    {reportTab === 'overview' && (
+                      <div className="apt-report-section">
+                        <div className="apt-report-hero">
+                          <div>
+                            <span className="apt-report-eyebrow">Tình trạng căn hộ</span>
+                            <strong>{riskLabel}</strong>
+                          </div>
+                          <span className="badge" style={{
+                            color: statusColor[reportApartment.apartmentStatus]?.color || '#6b7280',
+                            backgroundColor: statusColor[reportApartment.apartmentStatus]?.bg || '#f3f4f6',
+                          }}>
+                            {statusLabel[reportApartment.apartmentStatus] || reportApartment.apartmentStatus || '—'}
+                          </span>
+                        </div>
+
+                        <div className="apt-report-stat-grid">
+                          <div className="apt-report-stat"><span>Cư dân</span><strong>{householdResidents.length}</strong></div>
+                          <div className="apt-report-stat"><span>Người thuê</span><strong>{tenant ? 1 : 0}</strong></div>
+                          <div className="apt-report-stat"><span>Phương tiện</span><strong>{vehicles.length}</strong></div>
+                          <div className="apt-report-stat"><span>Thiết bị</span><strong>{devices.length}</strong></div>
+                        </div>
+
+                        <div className="apt-report-info-grid">
+                          <div className="apt-report-info">
+                            <span>Chủ hộ</span>
+                            <strong>{owner?.fullName || 'Chưa có'}</strong>
+                            <small>{owner?.phone || owner?.phoneNumber || owner?.email || '—'}</small>
+                          </div>
+                          <div className="apt-report-info">
+                            <span>Người thuê</span>
+                            <strong>{tenant?.fullName || 'Chưa có'}</strong>
+                            <small>{tenant?.phone || tenant?.phoneNumber || tenant?.email || '—'}</small>
+                          </div>
+                          <div className="apt-report-info">
+                            <span>Diện tích</span>
+                            <strong>{reportApartment.area ? `${reportApartment.area} m²` : '—'}</strong>
+                            <small>{reportApartment.complexName || 'Hưng Thịnh'} · Tòa {reportApartment.block || '—'} · Tầng {reportApartment.floor ?? '—'}</small>
+                          </div>
+                        </div>
+
+                        <section className="apt-report-panel apt-report-residents-panel">
+                          <div className="apt-report-panel__head">
+                            <strong>Cư dân trong căn hộ</strong>
+                            <span>
+                              {householdResidents.length} cư dân
+                              {tenant ? ' · 1 người thuê' : ''}
+                            </span>
+                          </div>
+                          {householdResidents.length > 0 ? (
+                            <div className="apt-report-resident-grid">
+                              {householdResidents.map((resident) => {
+                                const relationship = getResidentRelationship(resident);
+                                const colors = relationshipColor[relationship] || relationshipColor.OTHER;
+                                const phone = getResidentPhone(resident);
+
+                                return (
+                                  <article
+                                    key={getResidentId(resident) || getResidentUsername(resident) || resident.fullName}
+                                    className="apt-report-resident-card"
+                                    style={{ '--resident-accent': colors.color, '--resident-bg': colors.bg }}
+                                  >
+                                    <div className="apt-report-resident-card__avatar">
+                                      {getResidentInitial(resident)}
+                                    </div>
+                                    <div className="apt-report-resident-card__body">
+                                      <div className="apt-report-resident-card__top">
+                                        <strong>{resident.fullName || getResidentUsername(resident) || 'Chưa có tên'}</strong>
+                                        <span>{relationshipLabel[relationship] || relationship || 'Khác'}</span>
+                                      </div>
+                                      <div className="apt-report-resident-card__meta">
+                                        <span>{phone || 'Chưa có SĐT'}</span>
+                                        <span>{resident.email || 'Chưa có email'}</span>
+                                      </div>
+                                      <small>{getRelationshipHint(relationship, owner?.fullName)}</small>
+                                    </div>
+                                  </article>
+                                );
+                              })}
+                            </div>
+                          ) : (
+                            <p className="apt-report-empty">Căn hộ này chưa có cư dân liên kết.</p>
+                          )}
+                        </section>
+                      </div>
+                    )}
+
+                    {reportTab === 'finance' && (
+                      <div className="apt-report-section">
+                        <div className="apt-report-stat-grid apt-report-stat-grid--finance">
+                          <div className="apt-report-stat apt-report-stat--success"><span>Đã thu</span><strong>{formatCurrency(paidAmount)}</strong></div>
+                          <div className="apt-report-stat apt-report-stat--danger"><span>Còn phải thu</span><strong>{formatCurrency(unpaidAmount)}</strong></div>
+                          <div className="apt-report-stat"><span>Hóa đơn</span><strong>{invoices.length}</strong><small>{paidInvoices.length} đã thanh toán</small></div>
+                          <div className="apt-report-stat"><span>Gần nhất</span><strong>{latestInvoice?.billingPeriod || '—'}</strong><small>{formatCurrency(latestInvoice?.totalAmount)}</small></div>
+                        </div>
+
+                        <div className="apt-report-finance-layout">
+                          <section className="apt-report-panel">
+                            <div className="apt-report-panel__head">
+                              <strong>Cơ cấu phí</strong>
+                              <span>Tổng cộng theo các hóa đơn</span>
+                            </div>
+                            <div className="apt-report-breakdown">
+                              {[
+                                ['Điện', electricFee],
+                                ['Nước', waterFee],
+                                ['Quản lý', managementFee],
+                                ['Gửi xe', parkingFee],
+                              ].map(([label, value]) => (
+                                <div key={label} className="apt-report-breakdown__item">
+                                  <span>{label}</span>
+                                  <strong>{formatCurrency(value)}</strong>
+                                </div>
+                              ))}
+                            </div>
+                          </section>
+
+                          <section className="apt-report-panel">
+                            <div className="apt-report-panel__head">
+                              <strong>Theo dõi thanh toán</strong>
+                              <span>{unpaidInvoices.length ? `${unpaidInvoices.length} hóa đơn cần xử lý` : 'Không có công nợ'}</span>
+                            </div>
+                            <div className="apt-report-payment-grid">
+                              <div>
+                                <span>Đã thanh toán</span>
+                                <strong>{paidInvoices.length}</strong>
+                              </div>
+                              <div>
+                                <span>Chưa thanh toán</span>
+                                <strong>{unpaidInvoices.length}</strong>
+                              </div>
+                              <div>
+                                <span>Tổng ghi nhận</span>
+                                <strong>{formatCurrency(totalAmount)}</strong>
+                              </div>
+                            </div>
+                          </section>
+                        </div>
+
+                        <div className="apt-report-list apt-report-invoice-list">
+                          <div className="apt-report-list__head apt-report-invoice-list__head">
+                            <strong>Hóa đơn gần đây</strong>
+                            <span>Hạn thanh toán</span>
+                            <span>Ngày thanh toán</span>
+                            <span>Hình thức</span>
+                            <span>Trạng thái</span>
+                            <b>{invoices.length} bản ghi</b>
+                          </div>
+                          {invoices.slice(0, 6).map((invoice) => {
+                            const latestPayment = getLatestSuccessfulPayment(invoice);
+                            const invoicePaidAmount = getInvoicePaidAmount(invoice);
+                            const remainingAmount = Math.max(0, toNumber(invoice.totalAmount) - invoicePaidAmount);
+
+                            return (
+                              <div key={invoice.invoiceId} className="apt-report-list__row apt-report-invoice-list__row">
+                                <div className="apt-report-invoice-main">
+                                  <strong>{invoice.billingPeriod || invoice.invoiceNumber || `#${invoice.invoiceId}`}</strong>
+                                  <span>{invoice.invoiceNumber && invoice.invoiceNumber !== invoice.billingPeriod ? invoice.invoiceNumber : `#${invoice.invoiceId}`}</span>
+                                  <small>Tạo {formatDate(invoice.createdAt)}</small>
+                                </div>
+                                <span className="apt-report-muted-cell">{formatDate(getInvoiceDueDate(invoice))}</span>
+                                <div className="apt-report-payment-cell">
+                                  <strong>{latestPayment ? formatDate(latestPayment.paymentDateTime) : '—'}</strong>
+                                  <span>{latestPayment?.payerName || latestPayment?.payerPhoneNumber || latestPayment?.transactionCode || 'Chưa ghi nhận'}</span>
+                                </div>
+                                <span className="apt-report-method-cell">{getPaymentMethodText(latestPayment)}</span>
+                                <span className={`apt-report-status-pill apt-report-status-pill--${String(invoice.invoiceStatus || 'unknown').toLowerCase()}`}>
+                                  {invoiceStatusLabel[invoice.invoiceStatus] || invoice.invoiceStatus || '—'}
+                                </span>
+                                <div className="apt-report-amount-cell">
+                                  <b>{formatCurrency(invoice.totalAmount)}</b>
+                                  <small>{remainingAmount > 0 ? `Còn ${formatCurrency(remainingAmount)}` : `Đã thu ${formatCurrency(invoicePaidAmount)}`}</small>
+                                </div>
+                              </div>
+                            );
+                          })}
+                          {invoices.length === 0 && <p className="apt-report-empty">Chưa có hóa đơn cho căn hộ này.</p>}
+                        </div>
+                      </div>
+                    )}
+
+                    {reportTab === 'utilities' && (
+                      <div className="apt-report-section">
+                        <div className="apt-report-utility-grid">
+                          <section className="apt-report-utility-card apt-report-utility-card--electric">
+                            <div className="apt-report-utility-card__head">
+                              <div>
+                                <span>Điện</span>
+                                <strong>Theo dõi tiêu thụ điện</strong>
+                              </div>
+                              <b>{formatMeasure(electricUsage, 'kWh')}</b>
+                            </div>
+                            <div className="apt-report-utility-metrics">
+                              <div>
+                                <span>Chỉ số mới nhất</span>
+                                <strong>{formatMeasure(latestReading?.electricCurrentReading, 'kWh')}</strong>
+                              </div>
+                              <div>
+                                <span>Tiêu thụ kỳ mới nhất</span>
+                                <strong>{formatMeasure(latestReading?.electricQuantity, 'kWh')}</strong>
+                              </div>
+                              <div>
+                                <span>Tiền điện</span>
+                                <strong>{formatCurrency(electricFee)}</strong>
+                              </div>
+                            </div>
+                            <div className="apt-report-list apt-report-list--embedded">
+                              <div className="apt-report-list__head">
+                                <strong>Lịch sử điện</strong>
+                                <span>{electricReadings.length} kỳ</span>
+                              </div>
+                              {electricReadings.slice(0, 6).map((reading) => (
+                                <div key={`electric-${reading.meterReadingId}`} className="apt-report-list__row">
+                                  <div>
+                                    <strong>{reading.billingPeriod}</strong>
+                                    <span>{formatDate(reading.recordedAt)}</span>
+                                  </div>
+                                  <b>{formatMeasure(reading.electricQuantity, 'kWh')}</b>
+                                </div>
+                              ))}
+                              {electricReadings.length === 0 && <p className="apt-report-empty">Chưa có dữ liệu điện.</p>}
+                            </div>
+                          </section>
+
+                          <section className="apt-report-utility-card apt-report-utility-card--water">
+                            <div className="apt-report-utility-card__head">
+                              <div>
+                                <span>Nước</span>
+                                <strong>Theo dõi tiêu thụ nước</strong>
+                              </div>
+                              <b>{formatMeasure(waterUsage, 'm³')}</b>
+                            </div>
+                            <div className="apt-report-utility-metrics">
+                              <div>
+                                <span>Chỉ số mới nhất</span>
+                                <strong>{formatMeasure(latestReading?.waterCurrentReading, 'm³')}</strong>
+                              </div>
+                              <div>
+                                <span>Tiêu thụ kỳ mới nhất</span>
+                                <strong>{formatMeasure(latestReading?.waterQuantity, 'm³')}</strong>
+                              </div>
+                              <div>
+                                <span>Tiền nước</span>
+                                <strong>{formatCurrency(waterFee)}</strong>
+                              </div>
+                            </div>
+                            <div className="apt-report-list apt-report-list--embedded">
+                              <div className="apt-report-list__head">
+                                <strong>Lịch sử nước</strong>
+                                <span>{waterReadings.length} kỳ</span>
+                              </div>
+                              {waterReadings.slice(0, 6).map((reading) => (
+                                <div key={`water-${reading.meterReadingId}`} className="apt-report-list__row">
+                                  <div>
+                                    <strong>{reading.billingPeriod}</strong>
+                                    <span>{formatDate(reading.recordedAt)}</span>
+                                  </div>
+                                  <b>{formatMeasure(reading.waterQuantity, 'm³')}</b>
+                                </div>
+                              ))}
+                              {waterReadings.length === 0 && <p className="apt-report-empty">Chưa có dữ liệu nước.</p>}
+                            </div>
+                          </section>
+                        </div>
+                      </div>
+                    )}
+
+                    {reportTab === 'operations' && (
+                      <div className="apt-report-section">
+                        <div className="apt-report-stat-grid">
+                          <div className="apt-report-stat"><span>Phản ánh</span><strong>{feedbacks.length}</strong><small>{openFeedbacks.length} đang mở</small></div>
+                          <div className="apt-report-stat"><span>Thiết bị cần chú ý</span><strong>{riskyDevices.length}</strong></div>
+                          <div className="apt-report-stat"><span>Lượt bảo trì</span><strong>{maintenances.length}</strong></div>
+                          <div className="apt-report-stat"><span>Chi phí bảo trì</span><strong>{formatCurrency(maintenanceCost)}</strong></div>
+                        </div>
+
+                        <div className="apt-report-info-grid">
+                          <div className="apt-report-info">
+                            <span>Thiết bị</span>
+                            <strong>{devices.length} thiết bị</strong>
+                            <small>
+                              {riskyDevices.length
+                                ? `${riskyDevices.length} thiết bị ${deviceStatusLabel.BROKEN.toLowerCase()}/${deviceStatusLabel.UNDER_MAINTENANCE.toLowerCase()}`
+                                : 'Không có cảnh báo thiết bị'}
+                            </small>
+                          </div>
+                          <div className="apt-report-info">
+                            <span>Phương tiện</span>
+                            <strong>{vehicles.length} xe</strong>
+                            <small>{vehicles.map((vehicle) => vehicleTypeLabel[vehicle.vehicleType] || vehicle.vehicleType).filter(Boolean).slice(0, 3).join(', ') || '—'}</small>
+                          </div>
+                          <div className="apt-report-info">
+                            <span>Hợp đồng</span>
+                            <strong>{contracts.length} hợp đồng</strong>
+                            <small>{activeContracts.length ? `Có hợp đồng ${contractStatusLabel.ACTIVE.toLowerCase()}` : 'Chưa có hợp đồng hiệu lực'}</small>
+                          </div>
+                        </div>
+
+                        <div className="apt-report-list">
+                          <div className="apt-report-list__head">
+                            <strong>Phản ánh gần đây</strong>
+                            <span>{feedbacks.length} bản ghi</span>
+                          </div>
+                          {feedbacks.slice(0, 5).map((feedback) => (
+                            <div key={feedback.feedbackId} className="apt-report-list__row">
+                              <div>
+                                <strong>{feedback.title || `Phản ánh #${feedback.feedbackId}`}</strong>
+                                <span>{feedbackStatusLabel[feedback.feedbackStatus] || feedback.feedbackStatus || '—'} · {formatDate(feedback.createdAt)}</span>
+                              </div>
+                              <b>{feedback.feedbackType || '—'}</b>
+                            </div>
+                          ))}
+                          {feedbacks.length === 0 && <p className="apt-report-empty">Chưa có phản ánh từ căn hộ này.</p>}
+                        </div>
+                      </div>
+                    )}
+                  </>
+                );
+              })()}
+            </div>
+
+            <div className="modal__footer">
+              <button className="btn btn--ghost" onClick={() => setReportModalOpen(false)}>
+                Đóng
+              </button>
+            </div>
+          </div>
+        </div>
+      ), document.body)}
+
       {/* Delete Modal */}
-      {deleteModalOpen && deleteTarget && (
-        <div className="modal-overlay" onClick={() => setDeleteModalOpen(false)}>
-          <div className="modal modal--sm" onClick={(e) => e.stopPropagation()}>
+      {deleteModalOpen && deleteTarget && createPortal((
+        <div className="modal-overlay apartment-delete-overlay" onClick={() => setDeleteModalOpen(false)}>
+          <div className="modal modal--sm apartment-delete-modal" onClick={(e) => e.stopPropagation()}>
             <div className="modal__header modal__header--danger">
               <h3 className="modal__title">Xác nhận xóa</h3>
               <button className="modal__close" onClick={() => setDeleteModalOpen(false)}>
@@ -1190,7 +1947,7 @@ export default function ApartmentsPage() {
             </div>
           </div>
         </div>
-      )}
+      ), document.body)}
     </div>
   );
 }

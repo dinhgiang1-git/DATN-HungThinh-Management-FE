@@ -1,6 +1,8 @@
 import { useState, useEffect, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import { toast } from 'react-toastify';
 import userService from '../services/userService';
+import DropdownSelect from '../components/common/DropdownSelect';
 
 /* ─── constants ─── */
 const ROLES = [
@@ -106,6 +108,15 @@ export default function UsersPage() {
   });
   const [formErrors, setFormErrors] = useState({});
   const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => {
+    if (!modalOpen) return undefined;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [modalOpen, modalMode]);
 
   // Delete state
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
@@ -385,13 +396,13 @@ export default function UsersPage() {
                     </td>
                     <td>
                       <div className="action-btns">
-                        <button className="action-btn action-btn--view" title="Xem" onClick={() => openViewModal(user)}>
+                        <button className="action-btn action-btn--view" data-tooltip="Xem chi tiết" aria-label="Xem chi tiết" onClick={() => openViewModal(user)}>
                           {Icons.eye}
                         </button>
-                        <button className="action-btn action-btn--edit" title="Sửa" onClick={() => openEditModal(user)}>
+                        <button className="action-btn action-btn--edit" data-tooltip="Chỉnh sửa" aria-label="Chỉnh sửa" onClick={() => openEditModal(user)}>
                           {Icons.edit}
                         </button>
-                        <button className="action-btn action-btn--delete" title="Xóa" onClick={() => openDeleteModal(user)}>
+                        <button className="action-btn action-btn--delete" data-tooltip="Xóa" aria-label="Xóa" onClick={() => openDeleteModal(user)}>
                           {Icons.trash}
                         </button>
                       </div>
@@ -468,9 +479,9 @@ export default function UsersPage() {
       )}
 
       {/* Create / Edit Modal */}
-      {modalOpen && (modalMode === 'create' || modalMode === 'edit') && (
-        <div className="modal-overlay" onClick={() => setModalOpen(false)}>
-          <div className="modal" onClick={(e) => e.stopPropagation()}>
+      {modalOpen && (modalMode === 'create' || modalMode === 'edit') && createPortal((
+        <div className="modal-overlay user-form-overlay" onClick={() => setModalOpen(false)}>
+          <div className="modal user-form-modal" onClick={(e) => e.stopPropagation()}>
             <div className="modal__header">
               <h3 className="modal__title">
                 {modalMode === 'create' ? 'Thêm người dùng mới' : 'Chỉnh sửa người dùng'}
@@ -532,14 +543,15 @@ export default function UsersPage() {
                   <label className="form-label">
                     Vai trò <span className="form-required">*</span>
                   </label>
-                  <select
-                    className={`form-select ${formErrors.userRole ? 'form-input--error' : ''}`}
+                  <DropdownSelect
+                    className={formErrors.userRole ? 'form-input--error' : ''}
                     value={formData.userRole}
-                    onChange={(e) => handleFormChange('userRole', e.target.value)}
-                  >
-                    <option value="ADMIN">Admin</option>
-                    <option value="TECHNICIAN">Kỹ thuật viên</option>
-                  </select>
+                    onChange={(value) => handleFormChange('userRole', value)}
+                    options={[
+                      { value: 'ADMIN', label: 'Admin' },
+                      { value: 'TECHNICIAN', label: 'Kỹ thuật viên' },
+                    ]}
+                  />
                   {formErrors.userRole && <span className="form-error">{formErrors.userRole}</span>}
                 </div>
 
@@ -579,12 +591,12 @@ export default function UsersPage() {
             </form>
           </div>
         </div>
-      )}
+      ), document.body)}
 
       {/* View Modal */}
-      {modalOpen && modalMode === 'view' && selectedUser && (
-        <div className="modal-overlay" onClick={() => setModalOpen(false)}>
-          <div className="modal modal--sm" onClick={(e) => e.stopPropagation()}>
+      {modalOpen && modalMode === 'view' && selectedUser && createPortal((
+        <div className="modal-overlay user-detail-overlay" onClick={() => setModalOpen(false)}>
+          <div className="modal modal--sm user-detail-modal" onClick={(e) => e.stopPropagation()}>
             <div className="modal__header">
               <h3 className="modal__title">Chi tiết người dùng</h3>
               <button className="modal__close" onClick={() => setModalOpen(false)}>
@@ -645,12 +657,12 @@ export default function UsersPage() {
             </div>
           </div>
         </div>
-      )}
+      ), document.body)}
 
       {/* Delete Modal */}
-      {deleteModalOpen && deleteTarget && (
-        <div className="modal-overlay" onClick={() => setDeleteModalOpen(false)}>
-          <div className="modal modal--sm" onClick={(e) => e.stopPropagation()}>
+      {deleteModalOpen && deleteTarget && createPortal((
+        <div className="modal-overlay user-delete-overlay" onClick={() => setDeleteModalOpen(false)}>
+          <div className="modal modal--sm user-delete-modal" onClick={(e) => e.stopPropagation()}>
             <div className="modal__header modal__header--danger">
               <h3 className="modal__title">Xác nhận xóa</h3>
               <button className="modal__close" onClick={() => setDeleteModalOpen(false)}>
@@ -681,7 +693,7 @@ export default function UsersPage() {
             </div>
           </div>
         </div>
-      )}
+      ), document.body)}
     </div>
   );
 }

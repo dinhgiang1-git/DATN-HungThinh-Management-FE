@@ -1,7 +1,9 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import { toast } from 'react-toastify';
 import feedbackService from '../services/feedbackService';
+import DropdownSelect from '../components/common/DropdownSelect';
 
 /* ─── constants ─── */
 const STATUSES = [
@@ -105,59 +107,30 @@ const STATUS_OPTIONS = [
 ];
 
 function StatusDropdown({ value, onChange }) {
-  const [open, setOpen] = useState(false);
-  const ref = useRef(null);
-
-  useEffect(() => {
-    const handler = (e) => {
-      if (ref.current && !ref.current.contains(e.target)) setOpen(false);
-    };
-    document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
-  }, []);
-
-  const current = STATUS_OPTIONS.find((o) => o.value === value) || STATUS_OPTIONS[0];
-  const sc = statusColor[current.value] || { color: '#6b7280', bg: '#f3f4f6' };
-
   return (
-    <div className="custom-select" ref={ref}>
-      <button
-        type="button"
-        className={`custom-select__trigger ${open ? 'custom-select__trigger--open' : ''}`}
-        onClick={() => setOpen(!open)}
-      >
-        <span className="custom-select__value">
-          <span className="custom-select__dot" style={{ background: sc.color }} />
-          {current.label}
+    <DropdownSelect
+      value={value}
+      onChange={onChange}
+      options={STATUS_OPTIONS}
+      renderValue={(option) => (
+        <span className="ds-status-value">
+          <span
+            className="ds-status-dot"
+            style={{ background: (statusColor[option.value] || {}).color || '#64748b' }}
+          />
+          <span className="ds-option-label">{option.label}</span>
         </span>
-        <svg className={`custom-select__arrow ${open ? 'custom-select__arrow--open' : ''}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-          <polyline points="6 9 12 15 18 9" />
-        </svg>
-      </button>
-      {open && (
-        <div className="custom-select__menu">
-          {STATUS_OPTIONS.map((opt) => {
-            const optSc = statusColor[opt.value] || { color: '#6b7280', bg: '#f3f4f6' };
-            const isActive = opt.value === value;
-            return (
-              <div
-                key={opt.value}
-                className={`custom-select__option ${isActive ? 'custom-select__option--active' : ''}`}
-                onClick={() => { onChange(opt.value); setOpen(false); }}
-              >
-                <span className="custom-select__dot" style={{ background: optSc.color }} />
-                <span className="custom-select__option-label">{opt.label}</span>
-                {isActive && (
-                  <svg className="custom-select__check" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-                    <polyline points="20 6 9 17 4 12" />
-                  </svg>
-                )}
-              </div>
-            );
-          })}
-        </div>
       )}
-    </div>
+      renderOption={(option) => (
+        <span className="ds-status-value">
+          <span
+            className="ds-status-dot"
+            style={{ background: (statusColor[option.value] || {}).color || '#64748b' }}
+          />
+          <span className="ds-option-label">{option.label}</span>
+        </span>
+      )}
+    />
   );
 }
 const formatDate = (dateStr) => {
@@ -223,6 +196,15 @@ export default function FeedbacksPage() {
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [deleting, setDeleting] = useState(false);
 
+  useEffect(() => {
+    if (!modalOpen || !['view', 'respond'].includes(modalMode)) return undefined;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [modalOpen, modalMode]);
+
   /* ─── fetch ─── */
   const fetchFeedbacks = useCallback(async () => {
     setLoading(true);
@@ -254,23 +236,6 @@ export default function FeedbacksPage() {
   /* ─── handlers ─── */
   const handleFilterChange = (val) => { setFilterStatus(val); setPage(0); };
   const handleToggleSort = () => { setSortDirection((p) => (p === 'asc' ? 'desc' : 'asc')); setPage(0); };
-
-
-  const openEditModal = (fb) => {
-    setModalMode('edit');
-    setSelectedFeedback(fb);
-    setFormData({
-      title: fb.title || '',
-      content: fb.content || '',
-      feedbackStatus: fb.feedbackStatus || 'PENDING',
-      apartmentId: fb.apartment?.id || fb.apartmentId || '',
-      response: fb.response || '',
-    });
-    setFormErrors({});
-    setAptFilterBlock('');
-    setAptFilterFloor('');
-    setModalOpen(true);
-  };
 
   const openRespondModal = (fb) => {
     setModalMode('respond');
@@ -375,8 +340,8 @@ export default function FeedbacksPage() {
   
   const handleCreateMaintenance = (fb) => {
     const desc = `${fb.title}: ${fb.content}`;
-    const aptId = fb.apartment?.id || fb.apartmentId || '';
-    const devId = fb.deviceId || (fb.device ? fb.device.deviceId : '');
+    const aptId = fb.apartment?.id || fb.apartment?.apartmentId || fb.apartmentId || '';
+    const devId = fb.deviceId || fb.device?.id || fb.device?.deviceId || '';
     navigate(`/maintenances?feedbackId=${fb.feedbackId}&description=${encodeURIComponent(desc)}&apartmentId=${aptId}&deviceId=${devId}`);
   };
 
@@ -489,13 +454,13 @@ export default function FeedbacksPage() {
                     </td>
                     <td>
                       <div className="action-btns">
-                        <button className="action-btn action-btn--view" title="Xem" onClick={() => openViewModal(fb)}>
+                        <button className="action-btn action-btn--view" data-tooltip="Xem chi tiết" aria-label="Xem chi tiết" onClick={() => openViewModal(fb)}>
                           {Icons.eye}
                         </button>
-                        <button className="action-btn action-btn--edit" title="Phản hồi" onClick={() => openRespondModal(fb)}>
+                        <button className="action-btn action-btn--edit" data-tooltip="Phản hồi" aria-label="Phản hồi" onClick={() => openRespondModal(fb)}>
                           {Icons.reply}
                         </button>
-                        <button className="action-btn action-btn--delete" title="Xóa" onClick={() => openDeleteModal(fb)}>
+                        <button className="action-btn action-btn--delete" data-tooltip="Xóa" aria-label="Xóa" onClick={() => openDeleteModal(fb)}>
                           {Icons.trash}
                         </button>
                       </div>
@@ -624,9 +589,9 @@ export default function FeedbacksPage() {
       )}
 
       {/* Respond Modal */}
-      {modalOpen && modalMode === 'respond' && selectedFeedback && (
-        <div className="modal-overlay" onClick={() => setModalOpen(false)}>
-          <div className="modal modal--respond" onClick={(e) => e.stopPropagation()}>
+      {modalOpen && modalMode === 'respond' && selectedFeedback && createPortal((
+        <div className="modal-overlay feedback-respond-overlay" onClick={() => setModalOpen(false)}>
+          <div className="modal modal--respond feedback-respond-modal" onClick={(e) => e.stopPropagation()}>
             <div className="modal__header">
               <h3 className="modal__title">Phản hồi yêu cầu</h3>
               <button className="modal__close" onClick={() => setModalOpen(false)}>
@@ -714,12 +679,12 @@ export default function FeedbacksPage() {
             </form>
           </div>
         </div>
-      )}
+      ), document.body)}
 
       {/* View Modal */}
-      {modalOpen && modalMode === 'view' && selectedFeedback && (
-        <div className="modal-overlay" onClick={() => setModalOpen(false)}>
-          <div className="modal" onClick={(e) => e.stopPropagation()}>
+      {modalOpen && modalMode === 'view' && selectedFeedback && createPortal((
+        <div className="modal-overlay feedback-detail-overlay" onClick={() => setModalOpen(false)}>
+          <div className="modal feedback-detail-modal" onClick={(e) => e.stopPropagation()}>
             <div className="modal__header">
               <h3 className="modal__title">Chi tiết phản hồi</h3>
               <button className="modal__close" onClick={() => setModalOpen(false)}>
@@ -839,7 +804,7 @@ export default function FeedbacksPage() {
             </div>
           </div>
         </div>
-      )}
+      ), document.body)}
 
       {/* Delete Modal */}
       {deleteModalOpen && deleteTarget && (

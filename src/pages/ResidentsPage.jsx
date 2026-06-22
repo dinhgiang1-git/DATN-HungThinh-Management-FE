@@ -1,7 +1,10 @@
-import { useState, useEffect, useCallback } from 'react';
+import { Fragment, useState, useEffect, useCallback, useMemo } from 'react';
+import { createPortal } from 'react-dom';
 import { toast } from 'react-toastify';
 import residentService from '../services/residentService';
+import apartmentService from '../services/apartmentService';
 import { exportToExcel } from '../utils/exportExcel';
+import DropdownSelect from '../components/common/DropdownSelect';
 
 /* ─── constants ─── */
 const RELATIONSHIPS = [
@@ -13,6 +16,12 @@ const RELATIONSHIPS = [
   { value: 'RELATIVE', label: 'Người thân' },
   { value: 'TENANT', label: 'Người thuê' },
   { value: 'OTHER', label: 'Khác' },
+];
+
+const APARTMENT_FILTERS = [
+  { value: '', label: 'Tất cả' },
+  { value: 'true', label: 'Đã có căn hộ' },
+  { value: 'false', label: 'Chưa có căn hộ' },
 ];
 
 const relationshipLabel = {
@@ -36,6 +45,33 @@ const relationshipColor = {
 };
 
 const PAGE_SIZE = 10;
+
+const getResidentId = (resident) => resident?.residentId ?? resident?.id;
+const getResidentUsername = (resident) => resident?.userName ?? resident?.username ?? resident?.loginName;
+const getResidentRelationship = (resident) => resident?.relationshipType ?? resident?.relationship;
+const getResidentPhone = (resident) => resident?.phoneNumber ?? resident?.phone;
+const getResidentEmail = (resident) => resident?.email;
+const getApartmentLabel = (apartment) => {
+  if (!apartment) return '—';
+  return `${apartment.block ? `${apartment.block}-` : ''}${apartment.apartmentNumber || '—'}${apartment.floor != null ? ` · Tầng ${apartment.floor}` : ''}`;
+};
+const getResidentInitial = (resident) => (resident?.fullName || getResidentUsername(resident) || '?').trim().charAt(0).toUpperCase();
+const getRelationshipHint = (relationship) => {
+  if (relationship === 'OWNER') return 'Chủ hộ';
+  if (relationship === 'TENANT') return 'Người thuê trong hộ';
+  if (relationship === 'SPOUSE') return 'Vợ/chồng của chủ hộ';
+  if (relationship === 'CHILD') return 'Con của chủ hộ';
+  if (relationship === 'PARENT') return 'Cha/mẹ của chủ hộ';
+  if (relationship === 'RELATIVE') return 'Người thân của chủ hộ';
+  return 'Thành viên liên quan';
+};
+const normalizeResidentRecord = (resident) => ({
+  ...resident,
+  id: getResidentId(resident),
+  userName: getResidentUsername(resident),
+  relationship: getResidentRelationship(resident),
+  phoneNumber: getResidentPhone(resident),
+});
 
 /* ─── icons ─── */
 const Icons = {
@@ -66,6 +102,11 @@ const Icons = {
   chevronRight: (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="9 6 15 12 9 18" /></svg>
   ),
+  chevronDown: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+      <path d="m6 9 6 6 6-6" />
+    </svg>
+  ),
   close: (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
       <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
@@ -81,20 +122,54 @@ const Icons = {
       <polyline points="23 4 23 10 17 10" /><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10" />
     </svg>
   ),
+  users: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+      <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" />
+      <path d="M23 21v-2a4 4 0 0 0-3-3.87" /><path d="M16 3.13a4 4 0 0 1 0 7.75" />
+    </svg>
+  ),
+  user: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+      <path d="M20 21a8 8 0 0 0-16 0" /><circle cx="12" cy="7" r="4" />
+    </svg>
+  ),
+  phone: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+      <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6A19.79 19.79 0 0 1 2.08 4.18 2 2 0 0 1 4.06 2h3a2 2 0 0 1 2 1.72c.12.9.32 1.77.6 2.6a2 2 0 0 1-.45 2.11L8 9.64a16 16 0 0 0 6.36 6.36l1.21-1.21a2 2 0 0 1 2.11-.45c.83.28 1.7.48 2.6.6A2 2 0 0 1 22 16.92z" />
+    </svg>
+  ),
+  mail: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+      <rect x="3" y="5" width="18" height="14" rx="2" /><path d="m3 7 9 6 9-6" />
+    </svg>
+  ),
 };
 
 export default function ResidentsPage() {
   /* ─── state ─── */
   const [residents, setResidents] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const [apartments, setApartments] = useState([]);
+  const [residentsLoading, setResidentsLoading] = useState(true);
+  const [apartmentsLoading, setApartmentsLoading] = useState(true);
   const [page, setPage] = useState(0);
   const [totalPages, setTotalPages] = useState(0);
   const [totalElements, setTotalElements] = useState(0);
   const [filterRelationship, setFilterRelationship] = useState('');
-  const [filterHasApartment, setFilterHasApartment] = useState('true');
+  const [filterHasApartment, setFilterHasApartment] = useState('');
   const [sortDirection, setSortDirection] = useState('asc');
   const [searchInput, setSearchInput] = useState('');
   const [searchKeyword, setSearchKeyword] = useState('');
+  const [expandedHouseholds, setExpandedHouseholds] = useState({});
+  const [memberTooltip, setMemberTooltip] = useState({
+    visible: false,
+    x: 0,
+    y: 0,
+    title: '',
+    relationship: '',
+    phone: '',
+    email: '',
+    context: '',
+  });
 
   // Debounce search
   useEffect(() => {
@@ -122,6 +197,15 @@ export default function ResidentsPage() {
   const [formErrors, setFormErrors] = useState({});
   const [submitting, setSubmitting] = useState(false);
 
+  useEffect(() => {
+    if (!modalOpen) return undefined;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [modalOpen]);
+
   // Delete state
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState(null);
@@ -129,7 +213,7 @@ export default function ResidentsPage() {
 
   /* ─── fetch ─── */
   const fetchResidents = useCallback(async () => {
-    setLoading(true);
+    setResidentsLoading(true);
     try {
       const params = {
         page,
@@ -150,13 +234,94 @@ export default function ResidentsPage() {
       toast.error('Không thể tải danh sách cư dân');
       console.error(err);
     } finally {
-      setLoading(false);
+      setResidentsLoading(false);
     }
   }, [page, filterRelationship, filterHasApartment, sortDirection, searchKeyword]);
+
+  const fetchApartments = useCallback(async () => {
+    setApartmentsLoading(true);
+    try {
+      const res = await apartmentService.getAll({ page: 0, size: 1000 });
+      setApartments(res.data?.data?.content || []);
+    } catch (err) {
+      console.error('Không thể tải dữ liệu căn hộ của cư dân:', err);
+    } finally {
+      setApartmentsLoading(false);
+    }
+  }, []);
 
   useEffect(() => {
     fetchResidents();
   }, [fetchResidents]);
+
+  useEffect(() => {
+    fetchApartments();
+  }, [fetchApartments]);
+
+  const householdByResidentId = useMemo(() => {
+    const map = {};
+    apartments.forEach((apartment) => {
+      const members = apartment.residents || [];
+      const owner = members.find((member) => String(getResidentId(member)) === String(apartment.ownerId))
+        || members.find((member) => getResidentRelationship(member) === 'OWNER')
+        || null;
+      const household = { apartment, owner, members };
+
+      members.forEach((member) => {
+        const memberId = getResidentId(member);
+        if (memberId != null) map[String(memberId)] = household;
+      });
+    });
+    return map;
+  }, [apartments]);
+
+  const residentById = useMemo(() => {
+    const map = {};
+    residents.forEach((resident) => {
+      if (resident?.id != null) map[String(resident.id)] = resident;
+    });
+    return map;
+  }, [residents]);
+
+  const displayResidents = useMemo(() => {
+    const principalRelationships = ['OWNER', 'TENANT'];
+    const rows = new Map();
+    const addResidentRow = (resident) => {
+      if (!resident) return;
+      const sourceResident = residentById[String(getResidentId(resident))];
+      const normalized = normalizeResidentRecord({ ...resident, ...sourceResident });
+      if (!normalized.id) return;
+      rows.set(String(normalized.id), normalized);
+    };
+
+    if (filterRelationship) {
+      residents.forEach(addResidentRow);
+      return Array.from(rows.values());
+    }
+
+    residents.forEach((resident) => {
+      const relationship = resident.relationship;
+      if (principalRelationships.includes(relationship)) {
+        addResidentRow(resident);
+        return;
+      }
+
+      const household = householdByResidentId[String(resident.id)];
+      if (!household) {
+        addResidentRow(resident);
+        return;
+      }
+
+      addResidentRow(household.owner);
+      household?.members
+        ?.filter((member) => getResidentRelationship(member) === 'TENANT')
+        .forEach(addResidentRow);
+    });
+
+    return Array.from(rows.values());
+  }, [residents, householdByResidentId, residentById, filterRelationship]);
+
+  const tableLoading = residentsLoading || apartmentsLoading;
 
   /* ─── handlers ─── */
   const handleFilterChange = (rel) => {
@@ -172,6 +337,48 @@ export default function ResidentsPage() {
   const handleToggleSort = () => {
     setSortDirection((prev) => (prev === 'asc' ? 'desc' : 'asc'));
     setPage(0);
+  };
+
+  const toggleHousehold = (residentId) => {
+    setExpandedHouseholds((prev) => ({
+      ...prev,
+      [residentId]: !prev[residentId],
+    }));
+  };
+
+  const getTooltipPosition = (event) => {
+    const offset = 14;
+    const width = 280;
+    const height = 132;
+    const nextX = event.clientX + offset + width > window.innerWidth
+      ? event.clientX - width - offset
+      : event.clientX + offset;
+    const nextY = event.clientY + offset + height > window.innerHeight
+      ? event.clientY - height - offset
+      : event.clientY + offset;
+
+    return {
+      x: Math.max(12, nextX),
+      y: Math.max(12, nextY),
+    };
+  };
+
+  const showMemberTooltip = (event, payload) => {
+    setMemberTooltip({
+      visible: true,
+      ...getTooltipPosition(event),
+      ...payload,
+    });
+  };
+
+  const moveMemberTooltip = (event) => {
+    setMemberTooltip((prev) => (
+      prev.visible ? { ...prev, ...getTooltipPosition(event) } : prev
+    ));
+  };
+
+  const hideMemberTooltip = () => {
+    setMemberTooltip((prev) => ({ ...prev, visible: false }));
   };
 
   const openCreateModal = () => {
@@ -313,7 +520,7 @@ export default function ResidentsPage() {
 
   /* ─── render ─── */
   return (
-    <div className="page">
+    <div className="page" id="resident-page">
       {/* Page header */}
       <div className="page__header">
         <div>
@@ -365,7 +572,7 @@ export default function ResidentsPage() {
         <div className="filter-group">
           <label className="filter-label">Căn hộ:</label>
           <div className="filter-tabs">
-            {[{ value: 'true', label: 'Đã có căn hộ' }, { value: 'false', label: 'Chưa có căn hộ' }].map((f) => (
+            {APARTMENT_FILTERS.map((f) => (
               <button
                 key={f.value}
                 className={`filter-tab ${filterHasApartment === f.value ? 'filter-tab--active' : ''}`}
@@ -398,12 +605,12 @@ export default function ResidentsPage() {
 
       {/* Table */}
       <div className="page__table-wrapper">
-        {loading ? (
+        {tableLoading ? (
           <div className="page__loading">
             <div className="spinner" />
             <span>Đang tải dữ liệu...</span>
           </div>
-        ) : residents.length === 0 ? (
+        ) : displayResidents.length === 0 ? (
           <div className="page__empty">
             <p>Không tìm thấy cư dân nào</p>
           </div>
@@ -414,6 +621,7 @@ export default function ResidentsPage() {
                 <th className="data-table__th--id">ID</th>
                 <th>Tên đăng nhập</th>
                 <th>Họ và tên</th>
+                <th>Căn hộ / Chủ hộ</th>
                 <th>Số điện thoại</th>
                 <th>Email</th>
                 <th>Mối quan hệ</th>
@@ -421,34 +629,139 @@ export default function ResidentsPage() {
               </tr>
             </thead>
             <tbody>
-              {residents.map((resident) => {
-                const rc = relationshipColor[resident.relationship] || { color: '#6b7280', bg: '#f3f4f6' };
+              {displayResidents.map((resident) => {
+                const relationship = resident.relationship;
+                const rc = relationshipColor[relationship] || { color: '#6b7280', bg: '#f3f4f6' };
+                const household = householdByResidentId[String(resident.id)];
+                const owner = household?.owner;
+                const isPrincipal = relationship === 'OWNER' || relationship === 'TENANT';
+                const memberCount = household?.members?.filter((member) => String(getResidentId(member)) !== String(resident.id)).length || 0;
+                const canExpandHousehold = isPrincipal && household && memberCount > 0;
+                const isExpanded = !!expandedHouseholds[resident.id];
                 return (
-                  <tr key={resident.id}>
-                    <td className="data-table__cell--id">{resident.id}</td>
-                    <td className="data-table__cell--bold">{resident.userName || '—'}</td>
-                    <td>{resident.fullName || '—'}</td>
-                    <td>{resident.phoneNumber || '—'}</td>
-                    <td>{resident.email || '—'}</td>
-                    <td>
-                      <span className="badge" style={{ color: rc.color, backgroundColor: rc.bg }}>
-                        {relationshipLabel[resident.relationship] || resident.relationship || '—'}
-                      </span>
-                    </td>
-                    <td>
-                      <div className="action-btns">
-                        <button className="action-btn action-btn--view" title="Xem" onClick={() => openViewModal(resident)}>
-                          {Icons.eye}
-                        </button>
-                        <button className="action-btn action-btn--edit" title="Sửa" onClick={() => openEditModal(resident)}>
-                          {Icons.edit}
-                        </button>
-                        <button className="action-btn action-btn--delete" title="Xóa" onClick={() => openDeleteModal(resident)}>
-                          {Icons.trash}
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
+                  <Fragment key={resident.id}>
+                    <tr
+                      className={`resident-row ${canExpandHousehold ? 'resident-row--clickable' : ''} ${isExpanded ? 'resident-row--expanded' : ''}`}
+                      onClick={() => canExpandHousehold && toggleHousehold(resident.id)}
+                    >
+                      <td className="data-table__cell--id">{resident.id}</td>
+                      <td className="data-table__cell--bold">{resident.userName || '—'}</td>
+                      <td>
+                        <div className="resident-name-cell">
+                          <div>
+                            <span className="resident-name-cell__name">{resident.fullName || '—'}</span>
+                            {canExpandHousehold && (
+                              <span className="resident-name-cell__sub">
+                                {memberCount} thành viên liên quan
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      </td>
+                      <td>
+                        {household ? (
+                          <div className="resident-household-context">
+                            <span className="resident-household-context__apt">{getApartmentLabel(household.apartment)}</span>
+                            <span className="resident-household-context__owner">
+                              {relationship === 'OWNER'
+                                ? 'Chủ hộ của căn hộ này'
+                                : relationship === 'TENANT'
+                                  ? `Người thuê · Chủ hộ: ${owner?.fullName || 'Chưa rõ'}`
+                                  : `Chủ hộ: ${owner?.fullName || 'Chưa rõ'}`}
+                            </span>
+                          </div>
+                        ) : (
+                          <span className="text-muted">Chưa gán căn hộ</span>
+                        )}
+                      </td>
+                      <td>{resident.phoneNumber || '—'}</td>
+                      <td>{resident.email || '—'}</td>
+                      <td>
+                        <div className="resident-relation-cell">
+                          <span className="badge" style={{ color: rc.color, backgroundColor: rc.bg }}>
+                            {relationshipLabel[relationship] || relationship || '—'}
+                          </span>
+                          {relationship !== 'OWNER' && owner?.fullName && (
+                            <span className="resident-relation-cell__sub">
+                              với {owner.fullName}
+                            </span>
+                          )}
+                        </div>
+                      </td>
+                      <td>
+                        <div className="action-btns">
+                          <button className="action-btn action-btn--view" data-tooltip="Xem chi tiết" aria-label="Xem chi tiết" onClick={(e) => { e.stopPropagation(); openViewModal(resident); }}>
+                            {Icons.eye}
+                          </button>
+                          <button className="action-btn action-btn--edit" data-tooltip="Chỉnh sửa" aria-label="Chỉnh sửa" onClick={(e) => { e.stopPropagation(); openEditModal(resident); }}>
+                            {Icons.edit}
+                          </button>
+                          <button className="action-btn action-btn--delete" data-tooltip="Xóa" aria-label="Xóa" onClick={(e) => { e.stopPropagation(); openDeleteModal(resident); }}>
+                            {Icons.trash}
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                    {canExpandHousehold && (
+                      <tr
+                        key={`${resident.id}-household`}
+                        className={`resident-household-row ${isExpanded ? 'resident-household-row--open' : 'resident-household-row--closed'}`}
+                        aria-hidden={!isExpanded}
+                      >
+                        <td colSpan="8">
+                          <div className="resident-household-collapse">
+                            <div className="resident-household-collapse__inner">
+                              <div className="resident-hh-inline">
+                                <span className="resident-hh-inline__label">
+                                  {Icons.users}
+                                  Thành viên trong hộ:
+                                </span>
+                                <div className="resident-hh-inline__list">
+                                  {household.members
+                                    .filter((member) => String(getResidentId(member)) !== String(resident.id))
+                                    .map((member) => {
+                                      const memberRelationship = getResidentRelationship(member);
+                                      const memberRc = relationshipColor[memberRelationship] || relationshipColor.OTHER;
+                                      const memberUsername = getResidentUsername(member);
+                                      const memberPhone = getResidentPhone(member);
+                                      const memberEmail = getResidentEmail(member);
+                                      const memberName = member.fullName || memberUsername || '—';
+                                      const memberRelationshipHint = getRelationshipHint(memberRelationship);
+                                      return (
+                                        <div
+                                          key={getResidentId(member)}
+                                          className="resident-hh-chip"
+                                          style={{ '--chip-accent': memberRc.color, '--chip-bg': memberRc.bg }}
+                                          onMouseEnter={(e) => showMemberTooltip(e, {
+                                            title: memberName,
+                                            relationship: relationshipLabel[memberRelationship] || memberRelationship || '—',
+                                            phone: memberPhone || 'Chưa có SĐT',
+                                            email: memberEmail || 'Chưa có email',
+                                            context: memberRelationship === 'OWNER'
+                                              ? getApartmentLabel(household.apartment)
+                                              : `${memberRelationshipHint} · với ${owner?.fullName || 'chủ hộ'}`,
+                                          })}
+                                          onMouseMove={moveMemberTooltip}
+                                          onMouseLeave={hideMemberTooltip}
+                                        >
+                                          <span className="resident-hh-chip__avatar" style={{ background: memberRc.bg, color: memberRc.color }}>
+                                            {getResidentInitial(member)}
+                                          </span>
+                                          <span className="resident-hh-chip__name">{memberName}</span>
+                                          <span className="resident-hh-chip__role" style={{ color: memberRc.color, background: memberRc.bg }}>
+                                            {relationshipLabel[memberRelationship] || memberRelationship || '—'}
+                                          </span>
+                                        </div>
+                                      );
+                                    })}
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
                 );
               })}
             </tbody>
@@ -496,9 +809,9 @@ export default function ResidentsPage() {
       )}
 
       {/* Create / Edit Modal */}
-      {modalOpen && (modalMode === 'create' || modalMode === 'edit') && (
-        <div className="modal-overlay" onClick={() => setModalOpen(false)}>
-          <div className="modal" onClick={(e) => e.stopPropagation()}>
+      {modalOpen && (modalMode === 'create' || modalMode === 'edit') && createPortal((
+        <div className="modal-overlay resident-form-overlay" onClick={() => setModalOpen(false)}>
+          <div className="modal resident-form-modal" onClick={(e) => e.stopPropagation()}>
             <div className="modal__header">
               <h3 className="modal__title">
                 {modalMode === 'create' ? 'Thêm cư dân mới' : 'Chỉnh sửa cư dân'}
@@ -528,19 +841,20 @@ export default function ResidentsPage() {
                   <label className="form-label">
                     Mối quan hệ <span className="form-required">*</span>
                   </label>
-                  <select
-                    className={`form-select ${formErrors.relationship ? 'form-input--error' : ''}`}
+                  <DropdownSelect
+                    className={formErrors.relationship ? 'form-input--error' : ''}
                     value={formData.relationship}
-                    onChange={(e) => handleFormChange('relationship', e.target.value)}
-                  >
-                    <option value="OWNER">Chủ hộ</option>
-                    <option value="SPOUSE">Vợ/Chồng</option>
-                    <option value="CHILD">Con</option>
-                    <option value="PARENT">Cha/Mẹ</option>
-                    <option value="RELATIVE">Người thân</option>
-                    <option value="TENANT">Người thuê</option>
-                    <option value="OTHER">Khác</option>
-                  </select>
+                    onChange={(value) => handleFormChange('relationship', value)}
+                    options={[
+                      { value: 'OWNER', label: 'Chủ hộ' },
+                      { value: 'SPOUSE', label: 'Vợ/Chồng' },
+                      { value: 'CHILD', label: 'Con' },
+                      { value: 'PARENT', label: 'Cha/Mẹ' },
+                      { value: 'RELATIVE', label: 'Người thân' },
+                      { value: 'TENANT', label: 'Người thuê' },
+                      { value: 'OTHER', label: 'Khác' },
+                    ]}
+                  />
                   {formErrors.relationship && <span className="form-error">{formErrors.relationship}</span>}
                 </div>
 
@@ -613,12 +927,12 @@ export default function ResidentsPage() {
             </form>
           </div>
         </div>
-      )}
+      ), document.body)}
 
       {/* View Modal */}
-      {modalOpen && modalMode === 'view' && selectedResident && (
-        <div className="modal-overlay" onClick={() => setModalOpen(false)}>
-          <div className="modal modal--sm" onClick={(e) => e.stopPropagation()}>
+      {modalOpen && modalMode === 'view' && selectedResident && createPortal((
+        <div className="modal-overlay resident-detail-overlay" onClick={() => setModalOpen(false)}>
+          <div className="modal modal--sm resident-detail-modal" onClick={(e) => e.stopPropagation()}>
             <div className="modal__header">
               <h3 className="modal__title">Chi tiết cư dân</h3>
               <button className="modal__close" onClick={() => setModalOpen(false)}>
@@ -679,12 +993,27 @@ export default function ResidentsPage() {
             </div>
           </div>
         </div>
+      ), document.body)}
+
+      {memberTooltip.visible && (
+        <div
+          className="resident-member-tooltip"
+          style={{ left: memberTooltip.x, top: memberTooltip.y }}
+        >
+          <strong>{memberTooltip.title}</strong>
+          <span>{memberTooltip.relationship}</span>
+          <small>{memberTooltip.context}</small>
+          <div className="resident-member-tooltip__meta">
+            <span>{memberTooltip.phone}</span>
+            <span>{memberTooltip.email}</span>
+          </div>
+        </div>
       )}
 
       {/* Delete Modal */}
-      {deleteModalOpen && deleteTarget && (
-        <div className="modal-overlay" onClick={() => setDeleteModalOpen(false)}>
-          <div className="modal modal--sm" onClick={(e) => e.stopPropagation()}>
+      {deleteModalOpen && deleteTarget && createPortal((
+        <div className="modal-overlay resident-delete-overlay" onClick={() => setDeleteModalOpen(false)}>
+          <div className="modal modal--sm resident-delete-modal" onClick={(e) => e.stopPropagation()}>
             <div className="modal__header modal__header--danger">
               <h3 className="modal__title">Xác nhận xóa</h3>
               <button className="modal__close" onClick={() => setDeleteModalOpen(false)}>
@@ -715,7 +1044,7 @@ export default function ResidentsPage() {
             </div>
           </div>
         </div>
-      )}
+      ), document.body)}
     </div>
   );
 }

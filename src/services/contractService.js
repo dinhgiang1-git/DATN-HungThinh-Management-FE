@@ -7,6 +7,9 @@ const contractService = {
   getById: (contractId) => {
     return api.get(`/api/v1/contracts/${contractId}`);
   },
+  getByApartment: (apartmentId, params = {}) => {
+    return api.get(`/api/v1/contracts/apartment/${apartmentId}`, { params });
+  },
   create: (data, file) => {
     const formData = new FormData();
     formData.append('data', new Blob([JSON.stringify(data)], { type: 'application/json' }));
@@ -32,6 +35,11 @@ const contractService = {
   },
   download: (contractId) => {
     return api.get(`/api/v1/contracts/${contractId}/download`, {
+      responseType: 'blob',
+    });
+  },
+  downloadResident: (contractId) => {
+    return api.get(`/api/v1/contracts/${contractId}/download-resident`, {
       responseType: 'blob',
     });
   },

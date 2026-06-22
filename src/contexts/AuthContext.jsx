@@ -1,32 +1,44 @@
-import { createContext, useContext, useState, useEffect } from 'react';
+import { createContext, useContext, useState } from 'react';
 
 const AuthContext = createContext(null);
 
-export function AuthProvider({ children }) {
-  const [user, setUser] = useState(null);
-  const [token, setToken] = useState(null);
-  const [loading, setLoading] = useState(true);
+function getSavedAuth() {
+  const savedToken = localStorage.getItem('token');
+  const savedUser = localStorage.getItem('user');
 
-  useEffect(() => {
-    const savedToken = localStorage.getItem('token');
-    const savedUser = localStorage.getItem('user');
-    if (savedToken && savedUser) {
-      setToken(savedToken);
-      setUser(JSON.parse(savedUser));
+  if (!savedToken || !savedUser) {
+    return { token: null, user: null };
+  }
+
+  try {
+    const parsedUser = JSON.parse(savedUser);
+    if (!parsedUser?.id) {
+      localStorage.removeItem('token');
+      localStorage.removeItem('user');
+      return { token: null, user: null };
     }
-    setLoading(false);
-  }, []);
+    return { token: savedToken, user: parsedUser };
+  } catch {
+    localStorage.removeItem('token');
+    localStorage.removeItem('user');
+    return { token: null, user: null };
+  }
+}
+
+export function AuthProvider({ children }) {
+  const [auth, setAuth] = useState(getSavedAuth);
+  const loading = false;
+
+  const { user, token } = auth;
 
   const login = (userData, authToken) => {
-    setUser(userData);
-    setToken(authToken);
+    setAuth({ user: userData, token: authToken });
     localStorage.setItem('token', authToken);
     localStorage.setItem('user', JSON.stringify(userData));
   };
 
   const logout = () => {
-    setUser(null);
-    setToken(null);
+    setAuth({ user: null, token: null });
     localStorage.removeItem('token');
     localStorage.removeItem('user');
   };

@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
+import { createPortal } from 'react-dom';
 import { toast } from 'react-toastify';
 import DatePicker, { registerLocale } from 'react-datepicker';
 import { vi } from 'date-fns/locale';
@@ -6,6 +7,7 @@ import 'react-datepicker/dist/react-datepicker.css';
 import contractService from '../services/contractService';
 import apartmentService from '../services/apartmentService';
 import SearchableSelect from '../components/common/SearchableSelect';
+import DropdownSelect from '../components/common/DropdownSelect';
 
 registerLocale('vi', vi);
 
@@ -160,6 +162,15 @@ export default function ContractsPage() {
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [deleting, setDeleting] = useState(false);
+
+  useEffect(() => {
+    if (!modalOpen && !deleteModalOpen) return undefined;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [modalOpen, deleteModalOpen]);
 
   /* ─── fetch ─── */
   const fetchContracts = useCallback(async () => {
@@ -526,7 +537,8 @@ export default function ContractsPage() {
                       {c.originalFileName ? (
                         <button
                           className="action-btn action-btn--view"
-                          title={`Tải: ${c.originalFileName}`}
+                          data-tooltip="Tải hợp đồng"
+                          aria-label={`Tải hợp đồng ${c.originalFileName}`}
                           onClick={() => handleDownload(c)}
                           style={{ display: 'inline-flex' }}
                         >
@@ -538,13 +550,13 @@ export default function ContractsPage() {
                     </td>
                     <td>
                       <div className="action-btns">
-                        <button className="action-btn action-btn--view" title="Xem" onClick={() => openViewModal(c)}>
+                        <button className="action-btn action-btn--view" data-tooltip="Xem chi tiết" aria-label="Xem chi tiết" onClick={() => openViewModal(c)}>
                           {Icons.eye}
                         </button>
-                        <button className="action-btn action-btn--edit" title="Sửa" onClick={() => openEditModal(c)}>
+                        <button className="action-btn action-btn--edit" data-tooltip="Chỉnh sửa" aria-label="Chỉnh sửa" onClick={() => openEditModal(c)}>
                           {Icons.edit}
                         </button>
-                        <button className="action-btn action-btn--delete" title="Xóa" onClick={() => openDeleteModal(c)}>
+                        <button className="action-btn action-btn--delete" data-tooltip="Xóa" aria-label="Xóa" onClick={() => openDeleteModal(c)}>
                           {Icons.trash}
                         </button>
                       </div>
@@ -597,9 +609,9 @@ export default function ContractsPage() {
       )}
 
       {/* Create / Edit Modal */}
-      {modalOpen && (modalMode === 'create' || modalMode === 'edit') && (
-        <div className="modal-overlay" onClick={() => setModalOpen(false)}>
-          <div className="modal" onClick={(e) => e.stopPropagation()}>
+      {modalOpen && (modalMode === 'create' || modalMode === 'edit') && createPortal((
+        <div className="modal-overlay contract-form-overlay" onClick={() => setModalOpen(false)}>
+          <div className="modal contract-form-modal" onClick={(e) => e.stopPropagation()}>
             <div className="modal__header">
               <h3 className="modal__title">
                 {modalMode === 'create' ? 'Thêm hợp đồng mới' : 'Chỉnh sửa hợp đồng'}
@@ -629,15 +641,16 @@ export default function ContractsPage() {
                   <label className="form-label">
                     Loại hợp đồng <span className="form-required">*</span>
                   </label>
-                  <select
-                    className={`form-select ${formErrors.contractType ? 'form-input--error' : ''}`}
+                  <DropdownSelect
+                    className={formErrors.contractType ? 'form-input--error' : ''}
                     value={formData.contractType}
-                    onChange={(e) => handleFormChange('contractType', e.target.value)}
-                  >
-                    <option value="RENT">Thuê</option>
-                    <option value="PURCHASE">Mua bán</option>
-                    <option value="SERVICE">Dịch vụ</option>
-                  </select>
+                    onChange={(value) => handleFormChange('contractType', value)}
+                    options={[
+                      { value: 'RENT', label: 'Thuê' },
+                      { value: 'PURCHASE', label: 'Mua bán' },
+                      { value: 'SERVICE', label: 'Dịch vụ' },
+                    ]}
+                  />
                   {formErrors.contractType && <span className="form-error">{formErrors.contractType}</span>}
                 </div>
 
@@ -645,15 +658,15 @@ export default function ContractsPage() {
                 {modalMode === 'edit' && (
                   <div className="form-field">
                     <label className="form-label">Trạng thái</label>
-                    <select
-                      className="form-select"
+                    <DropdownSelect
                       value={formData.contractStatus}
-                      onChange={(e) => handleFormChange('contractStatus', e.target.value)}
-                    >
-                      <option value="ACTIVE">Đang hiệu lực</option>
-                      <option value="EXPIRED">Hết hạn</option>
-                      <option value="TERMINATED">Đã chấm dứt</option>
-                    </select>
+                      onChange={(value) => handleFormChange('contractStatus', value)}
+                      options={[
+                        { value: 'ACTIVE', label: 'Đang hiệu lực' },
+                        { value: 'EXPIRED', label: 'Hết hạn' },
+                        { value: 'TERMINATED', label: 'Đã chấm dứt' },
+                      ]}
+                    />
                   </div>
                 )}
 
@@ -796,12 +809,12 @@ export default function ContractsPage() {
             </form>
           </div>
         </div>
-      )}
+      ), document.body)}
 
       {/* View Modal */}
-      {modalOpen && modalMode === 'view' && selectedContract && (
-        <div className="modal-overlay" onClick={() => setModalOpen(false)}>
-          <div className="modal modal--sm" onClick={(e) => e.stopPropagation()}>
+      {modalOpen && modalMode === 'view' && selectedContract && createPortal((
+        <div className="modal-overlay contract-detail-overlay" onClick={() => setModalOpen(false)}>
+          <div className="modal modal--sm contract-detail-modal" onClick={(e) => e.stopPropagation()}>
             <div className="modal__header">
               <h3 className="modal__title">Chi tiết hợp đồng</h3>
               <button className="modal__close" onClick={() => setModalOpen(false)}>
@@ -926,12 +939,12 @@ export default function ContractsPage() {
             </div>
           </div>
         </div>
-      )}
+      ), document.body)}
 
       {/* Delete Modal */}
-      {deleteModalOpen && deleteTarget && (
-        <div className="modal-overlay" onClick={() => setDeleteModalOpen(false)}>
-          <div className="modal modal--sm" onClick={(e) => e.stopPropagation()}>
+      {deleteModalOpen && deleteTarget && createPortal((
+        <div className="modal-overlay contract-delete-overlay" onClick={() => setDeleteModalOpen(false)}>
+          <div className="modal modal--sm contract-delete-modal" onClick={(e) => e.stopPropagation()}>
             <div className="modal__header modal__header--danger">
               <h3 className="modal__title">Xác nhận xóa</h3>
               <button className="modal__close" onClick={() => setDeleteModalOpen(false)}>
@@ -962,7 +975,7 @@ export default function ContractsPage() {
             </div>
           </div>
         </div>
-      )}
+      ), document.body)}
     </div>
   );
 }

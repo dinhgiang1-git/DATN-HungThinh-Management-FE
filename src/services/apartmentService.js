@@ -10,6 +10,9 @@ const apartmentService = {
   getByResident: (residentId) => {
     return api.get(`/api/v1/apartments/resident/${residentId}`);
   },
+  getStatistics: (params = {}) => {
+    return api.get('/api/v1/apartments/statistics', { params });
+  },
   create: (data) => {
     return api.post('/api/v1/apartments', data);
   },

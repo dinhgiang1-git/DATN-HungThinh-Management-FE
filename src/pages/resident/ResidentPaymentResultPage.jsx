@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import paymentService from '../services/paymentService';
+import paymentService from '../../services/paymentService';
 
-export default function PaymentResultPage() {
+export default function ResidentPaymentResultPage() {
   const { search } = useLocation();
   const navigate = useNavigate();
   const [processed, setProcessed] = useState(false);
@@ -69,9 +69,9 @@ export default function PaymentResultPage() {
 
   if (!resultCode) {
     return (
-      <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%', minHeight: 'calc(100vh - 150px)', background: '#f8fafc' }}>
+      <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh', background: '#f8fafc' }}>
         <div style={{ fontSize: '18px', color: '#64748b', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '10px' }}>
-          <div className="spinner" style={{ width: '24px', height: '24px', border: '3px solid #cbd5e1', borderTopColor: '#ae2070', borderRadius: '50%', animation: 'spin 1s linear infinite' }}></div>
+          <div style={{ width: '24px', height: '24px', border: '3px solid #cbd5e1', borderTopColor: '#ae2070', borderRadius: '50%', animation: 'spin 1s linear infinite' }}></div>
           Đang xác thực kết quả giao dịch {providerName}...
         </div>
       </div>
@@ -79,7 +79,7 @@ export default function PaymentResultPage() {
   }
 
   return (
-    <div style={{ fontFamily: 'Inter, sans-serif', backgroundColor: '#f8fafc', display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: 'calc(100vh - 100px)', margin: 0, padding: '20px' }}>
+    <div style={{ fontFamily: 'Inter, sans-serif', backgroundColor: '#f8fafc', display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: '100vh', margin: 0, padding: '20px' }}>
       <div style={{ background: '#ffffff', padding: '40px 30px', borderRadius: '16px', boxShadow: '0 10px 25px rgba(0,0,0,0.05)', textAlign: 'center', maxWidth: '450px', width: '100%' }}>
         <div style={{ width: '80px', height: '80px', borderRadius: '50%', display: 'flex', justifyContent: 'center', alignItems: 'center', margin: '0 auto 20px', background: isSuccess && !hasRecordingError ? '#d1fae5' : '#fee2e2', color: isSuccess && !hasRecordingError ? '#10b981' : '#ef4444' }}>
           {isSuccess && !hasRecordingError ? (
@@ -125,10 +125,10 @@ export default function PaymentResultPage() {
         )}
 
         <button 
-          onClick={() => navigate('/invoices')}
+          onClick={() => navigate('/resident/invoices')}
           style={{ width: '100%', padding: '14px 24px', borderRadius: '10px', fontWeight: 600, fontSize: '16px', background: isSuccess ? '#10b981' : '#ef4444', color: '#fff', border: 'none', cursor: 'pointer', transition: 'all 0.2s', boxShadow: isSuccess ? '0 4px 6px rgba(16, 185, 129, 0.2)' : '0 4px 6px rgba(239, 68, 68, 0.2)' }}
         >
-          Trở về Quản lý Hóa đơn
+          Trở về Hóa đơn
         </button>
       </div>
     </div>

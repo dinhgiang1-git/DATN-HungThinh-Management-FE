@@ -7,6 +7,9 @@ const residentService = {
   getById: (residentId) => {
     return api.get(`/api/v1/residents/${residentId}`);
   },
+  getByUsername: (username) => {
+    return api.get(`/api/v1/residents/username/${username}`);
+  },
   create: (data) => {
     return api.post('/api/v1/residents', data);
   },

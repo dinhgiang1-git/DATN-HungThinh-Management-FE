@@ -41,10 +41,13 @@ export default function SearchableSelect({
   }, [isOpen]);
 
   const filteredOptions = options.filter((opt) => {
-    const q = search.toLowerCase();
+    const q = search.trim().toLowerCase();
+    if (!q) return true;
+    const extraSearchText = [opt.search, opt.keywords].filter(Boolean).join(' ');
     return (
       opt.label.toLowerCase().includes(q) ||
-      (opt.sub && opt.sub.toLowerCase().includes(q))
+      (opt.sub && opt.sub.toLowerCase().includes(q)) ||
+      extraSearchText.toLowerCase().includes(q)
     );
   });
 
